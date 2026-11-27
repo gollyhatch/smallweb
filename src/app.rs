@@ -447,8 +447,9 @@ impl App {
             KeyCode::Char('r') => self.reload(),
             KeyCode::Char('j') | KeyCode::Down => self.scroll_by(1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_page(1),
+            KeyCode::PageDown => self.scroll_page(1),
             KeyCode::PageUp => self.scroll_page(-1),
+            KeyCode::Char(' ') => self.scroll_to_next_paragraph(),
             KeyCode::Char('d') => self.scroll_half_page(1),
             KeyCode::Char('u') => self.scroll_half_page(-1),
             KeyCode::Char('g') | KeyCode::Home => self.scroll_to_top(),
@@ -716,6 +717,12 @@ impl App {
         self.scroll_by(step * direction as isize);
     }
 
+    pub fn scroll_to_next_paragraph(&mut self) {
+        let target = next_paragraph_start(&self.article_lines, self.scroll)
+            .unwrap_or(self.article_lines.len());
+        self.scroll = target.min(self.max_scroll());
+    }
+
     pub fn scroll_to_top(&mut self) {
         self.scroll = 0;
     }
@@ -929,11 +936,54 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn next_paragraph_start(lines: &[Line<'_>], current: usize) -> Option<usize> {
+    let mut index = current.min(lines.len());
+    while index < lines.len() && !is_blank_line(&lines[index]) {
+        index += 1;
+    }
+    while index < lines.len() && is_blank_line(&lines[index]) {
+        index += 1;
+    }
+    (index < lines.len()).then_some(index)
+}
+
+fn is_blank_line(line: &Line<'_>) -> bool {
+    line.spans.iter().all(|span| span.content.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn finds_the_next_paragraph_start() {
+        let lines = vec![
+            Line::from("first"),
+            Line::from("continues"),
+            Line::from(""),
+            Line::from("second"),
+            Line::from("continues"),
+            Line::from(""),
+            Line::from(""),
+            Line::from("third"),
+        ];
+        assert_eq!(next_paragraph_start(&lines, 0), Some(3));
+        assert_eq!(next_paragraph_start(&lines, 2), Some(3));
+        assert_eq!(next_paragraph_start(&lines, 3), Some(7));
+        assert_eq!(next_paragraph_start(&lines, 7), None);
+    }
+
+    #[test]
+    fn treats_whitespace_only_lines_as_blank() {
+        let lines = vec![
+            Line::from("first"),
+            Line::from(ratatui::text::Span::raw("   ")),
+            Line::from("second"),
+        ];
+        assert_eq!(next_paragraph_start(&lines, 0), Some(2));
+    }
 
     #[test]
     fn decodes_and_limits_image_size() {

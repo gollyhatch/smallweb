@@ -311,7 +311,7 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         )
     } else {
         (
-            "j/k scroll · d/u half page · space page · g/G top/bottom · r reload".to_string(),
+            "j/k scroll · d/u half page · space paragraph · g/G top/bottom · r reload".to_string(),
             Style::default().fg(color(theme, "text.dim")),
         )
     };
@@ -446,7 +446,8 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("T", "choose and save a theme (live preview)"),
         ("j / k", "scroll one line"),
         ("d / u", "scroll half a page down / up"),
-        ("space / pgdn", "page down"),
+        ("space", "scroll to the next paragraph"),
+        ("pgdn", "page down"),
         ("pgup", "page up"),
         ("g / G", "jump to top / bottom"),
         ("r", "reload article, or retry loading posts"),
@@ -560,7 +561,11 @@ fn build_article_lines(article: &Article, width: usize, theme: &Theme) -> Vec<Li
         }
         previous = Some(block.kind);
     }
-    while sink.lines.last().is_some_and(|line| line.spans.is_empty()) {
+    while sink
+        .lines
+        .last()
+        .is_some_and(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
+    {
         sink.lines.pop();
     }
     sink.lines

@@ -32,7 +32,8 @@ cargo install --path .
 | `T` | Theme picker with live preview; selection is saved |
 | `j`/`k`, `↑`/`↓` | Scroll one line |
 | `d`/`u` | Scroll half a page down / up |
-| `Space`, `PgDn` | Page down |
+| `Space` | Scroll to the beginning of the next paragraph |
+| `PgDn` | Page down |
 | `PgUp` | Page up |
 | `g`, `G` | Top / bottom |
 | `r` | Reload the article, or retry loading posts |
