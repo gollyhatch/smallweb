@@ -280,57 +280,51 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
 
     let help = Line::from(vec![
         Span::styled("n", key),
-        Span::styled(" next  ", label),
+        Span::styled(" next ", label),
         Span::styled("b", key),
-        Span::styled(" back  ", label),
+        Span::styled(" back ", label),
         Span::styled("l", key),
-        Span::styled(" like  ", label),
+        Span::styled(" like ", label),
         Span::styled("F", key),
-        Span::styled(" flag  ", label),
+        Span::styled(" flag ", label),
         Span::styled("y", key),
-        Span::styled(" copy  ", label),
+        Span::styled(" copy ", label),
         Span::styled("Y", key),
-        Span::styled(" smallweb  ", label),
+        Span::styled(" web ", label),
         Span::styled("o", key),
-        Span::styled(" open  ", label),
+        Span::styled(" open ", label),
         Span::styled("S", key),
-        Span::styled(" share  ", label),
+        Span::styled(" share ", label),
         Span::styled("i", key),
-        Span::styled(" images  ", label),
+        Span::styled(" img ", label),
         Span::styled("H", key),
-        Span::styled(" history  ", label),
+        Span::styled(" hist ", label),
         Span::styled("t", key),
-        Span::styled(" topics  ", label),
+        Span::styled(" topics ", label),
         Span::styled("T", key),
-        Span::styled(" theme  ", label),
+        Span::styled(" theme ", label),
         Span::styled("?", key),
-        Span::styled(" help  ", label),
+        Span::styled(" help ", label),
         Span::styled("q", key),
         Span::styled(" quit", label),
     ]);
     frame.render_widget(Paragraph::new(help), row(area, 0));
 
-    let (text, style) = if let Some(status) = &app.status {
+    if let Some(status) = &app.status {
         let (prefix, token) = match status.kind {
             StatusKind::Info => ("· ", "info"),
             StatusKind::Success => ("✓ ", "success"),
             StatusKind::Warning => ("! ", "warning"),
             StatusKind::Error => ("✗ ", "error"),
         };
-        (
-            format!("{prefix}{}", status.message),
-            Style::default().fg(color(theme, token)),
-        )
-    } else {
-        (
-            "j/k scroll · d/u half page · space paragraph · g/G top/bottom · r reload".to_string(),
-            Style::default().fg(color(theme, "text.dim")),
-        )
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(text, style))),
-        row(area, 1),
-    );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{prefix}{}", status.message),
+                Style::default().fg(color(theme, token)),
+            ))),
+            row(area, 1),
+        );
+    }
 }
 
 fn render_history(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
@@ -428,9 +422,9 @@ fn render_history(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
             Span::styled("↑↓", key_style(theme)),
             Span::styled(" select  ", muted),
             Span::styled("enter", key_style(theme)),
-            Span::styled(" open  ", muted),
+            Span::styled(" open ", muted),
             Span::styled("ctrl+s", key_style(theme)),
-            Span::styled(" share  ", muted),
+            Span::styled(" share ", muted),
             Span::styled("esc", key_style(theme)),
             Span::styled(" close", muted),
         ]),
