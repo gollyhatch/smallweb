@@ -25,6 +25,7 @@ cargo install --path .
 | `n`, `→`, `]` | Next random post |
 | `b`, `←` | Go back to the previous post |
 | `l` | Toggle like on the current post (sent to Kagi) |
+| `F` | Flag the current post as inappropriate (sent to Kagi) |
 | `y` | Copy the original URL |
 | `o`, `Enter` | Open the original post in the configured browser |
 | `S` | Run the configured share command with the post URL |
@@ -88,8 +89,9 @@ Run `smallweb --list-themes` to list the built-in opaline theme ids.
 
 ## Notes
 
-- This uses Kagi's public Small Web deck and like/unlike endpoints, which are not a documented
-  public API. Likes are real reactions sent to Kagi; pressing `l` again removes the reaction.
+- This uses Kagi's public Small Web deck, like/unlike, and flag endpoints, which are not a
+  documented public API. Likes are real reactions sent to Kagi; pressing `l` again removes the
+  reaction. Flags are real reports sent to Kagi.
 - Article extraction uses `dom_smoothie`, a Rust port of Mozilla Readability. Pages whose content
   is mostly JavaScript may produce little readable text; press `o` to read those in the browser.
 - Article images are off by default. Set `images = true` in the config or press `i` to enable them.

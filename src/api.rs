@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use reqwest::blocking::{Client, Response};
+use reqwest::redirect::Policy;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,7 @@ const SMALLWEB_URL: &str = "https://kagi.com/smallweb/";
 const DECK_URL: &str = "https://kagi.com/smallweb/api/deck";
 const LIKE_URL: &str = "https://kagi.com/smallweb/api/like";
 const UNLIKE_URL: &str = "https://kagi.com/smallweb/api/unlike";
+const FLAG_URL: &str = "https://kagi.com/smallweb/flag_content";
 const MAX_HTML_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 const USER_AGENT: &str = "smallweb-tui/0.1 (terminal reader)";
@@ -50,17 +52,15 @@ pub struct LikeOutcome {
 #[derive(Clone)]
 pub struct Api {
     client: Client,
+    form_client: Client,
 }
 
 impl Api {
     pub fn new() -> Result<Self> {
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(Duration::from_secs(25))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .context("building HTTP client")?;
-        Ok(Self { client })
+        Ok(Self {
+            client: build_client(Policy::limited(10))?,
+            form_client: build_client(Policy::none())?,
+        })
     }
 
     pub fn deck(&self, topic: Option<&str>) -> Result<Vec<Post>> {
@@ -131,6 +131,21 @@ impl Api {
 
     pub fn unlike(&self, url: &str) -> Result<LikeOutcome> {
         self.send_reaction(UNLIKE_URL, url, "unlike")
+    }
+
+    pub fn flag(&self, url: &str) -> Result<()> {
+        let response = self
+            .form_client
+            .post(FLAG_URL)
+            .header("Accept", "text/html")
+            .form(&[("url", url)])
+            .send()
+            .context("sending the flag")?;
+        let status = response.status();
+        if !status.is_success() && !status.is_redirection() {
+            bail!("flag failed with HTTP {status}");
+        }
+        Ok(())
     }
 
     fn send_reaction(&self, endpoint: &str, url: &str, action: &str) -> Result<LikeOutcome> {
@@ -234,6 +249,16 @@ impl Api {
         }
         Ok(bytes)
     }
+}
+
+fn build_client(redirect: Policy) -> Result<Client> {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(25))
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(redirect)
+        .build()
+        .context("building HTTP client")
 }
 
 impl Post {

@@ -101,6 +101,13 @@ fn render_header(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
             push_separator(&mut meta, muted);
             meta.push(Span::styled("♥ liked", error));
         }
+        if app.is_flagged(&post.url) {
+            push_separator(&mut meta, muted);
+            meta.push(Span::styled(
+                "⚑ flagged",
+                Style::default().fg(color(theme, "warning")),
+            ));
+        }
     }
     frame.render_widget(Paragraph::new(Line::from(meta)), row(area, 1));
 
@@ -278,6 +285,8 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         Span::styled(" back  ", label),
         Span::styled("l", key),
         Span::styled(" like  ", label),
+        Span::styled("F", key),
+        Span::styled(" flag  ", label),
         Span::styled("y", key),
         Span::styled(" copy  ", label),
         Span::styled("o", key),
@@ -549,6 +558,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("n / → / ]", "next random post"),
         ("b / ←", "go back to the previous post"),
         ("l", "toggle like on the post (sent to Kagi)"),
+        ("F", "flag the post as inappropriate (sent to Kagi)"),
         ("y", "copy the original URL"),
         ("o / enter", "open the original post in your browser"),
         ("S", "run the configured share command with the post URL"),

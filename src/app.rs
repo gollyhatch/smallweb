@@ -82,6 +82,8 @@ pub struct App {
     pub article_height: usize,
     pub liked: HashSet<String>,
     pub liking: HashSet<String>,
+    flagged: HashSet<String>,
+    flagging: HashSet<String>,
     history: Vec<Post>,
     pub seen_posts: Vec<Post>,
     seen: HashSet<String>,
@@ -144,6 +146,8 @@ impl App {
             article_height: 10,
             liked: HashSet::new(),
             liking: HashSet::new(),
+            flagged: HashSet::new(),
+            flagging: HashSet::new(),
             history: back,
             seen_posts,
             seen,
@@ -309,6 +313,18 @@ impl App {
                             Err(error) => image.error = Some(error),
                         }
                         self.lines_width = 0;
+                    }
+                }
+            }
+            Msg::Flag { url, result } => {
+                self.flagging.remove(&url);
+                match result {
+                    Ok(()) => {
+                        self.flagged.insert(url);
+                        self.set_status(StatusKind::Success, "Post flagged");
+                    }
+                    Err(error) => {
+                        self.set_status(StatusKind::Error, format!("Could not flag post: {error}"));
                     }
                 }
             }
@@ -496,6 +512,7 @@ impl App {
             KeyCode::Char('n') | KeyCode::Right | KeyCode::Char(']') => self.next_post(),
             KeyCode::Char('b') | KeyCode::Left => self.previous_post(),
             KeyCode::Char('l') => self.toggle_like_current(),
+            KeyCode::Char('F') => self.flag_current(),
             KeyCode::Char('y') => self.copy_current_url(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
             KeyCode::Char('S') => self.share_current(),
@@ -844,6 +861,32 @@ impl App {
         );
     }
 
+    fn flag_current(&mut self) {
+        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            self.set_status(StatusKind::Warning, "No post to flag");
+            return;
+        };
+        if self.flagged.contains(&url) {
+            self.set_status(StatusKind::Info, "You already flagged this post");
+            return;
+        }
+        if !self.flagging.insert(url.clone()) {
+            self.set_status(StatusKind::Info, "Flag already in flight");
+            return;
+        }
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        let flag_url = url.clone();
+        thread::spawn(move || {
+            let result = api.flag(&flag_url).map_err(format_error);
+            let _ = tx.send(Msg::Flag {
+                url: flag_url,
+                result,
+            });
+        });
+        self.set_status(StatusKind::Info, "Flagging post…");
+    }
+
     fn copy_current_url(&mut self) {
         let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
             self.set_status(StatusKind::Warning, "No post to copy");
@@ -1003,6 +1046,10 @@ impl App {
     pub fn is_liked(&self, url: &str) -> bool {
         self.liked.contains(url)
     }
+
+    pub fn is_flagged(&self, url: &str) -> bool {
+        self.flagged.contains(url)
+    }
 }
 
 pub struct HistorySearch {
@@ -1082,6 +1129,10 @@ enum Msg {
         article_url: String,
         index: usize,
         result: Result<Arc<image::RgbaImage>, String>,
+    },
+    Flag {
+        url: String,
+        result: Result<(), String>,
     },
     Topics(Result<Vec<Topic>, String>),
 }
