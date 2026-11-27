@@ -624,7 +624,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("T", "choose and save a theme (live preview)"),
         ("j / k", "scroll one line"),
         ("d / u", "scroll half a page down / up"),
-        ("space", "scroll to the next paragraph"),
+        ("space", "scroll to the next paragraph or image"),
         ("pgdn", "page down"),
         ("pgup", "page up"),
         ("g / G", "jump to top / bottom"),

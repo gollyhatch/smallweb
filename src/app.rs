@@ -1205,7 +1205,7 @@ impl App {
     }
 
     pub fn scroll_to_next_paragraph(&mut self) {
-        let target = next_paragraph_start(&self.article_lines, self.scroll)
+        let target = next_scroll_stop(&self.article_lines, &self.article_images, self.scroll)
             .unwrap_or(self.article_lines.len());
         self.scroll = target.min(self.max_scroll());
     }
@@ -1483,6 +1483,23 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn next_scroll_stop(
+    lines: &[Line<'_>],
+    images: &[ArticleImageLayout],
+    current: usize,
+) -> Option<usize> {
+    let text = next_paragraph_start(lines, current);
+    let image = images
+        .iter()
+        .map(|image| image.line)
+        .filter(|line| *line > current)
+        .min();
+    match (text, image) {
+        (Some(text), Some(image)) => Some(text.min(image)),
+        (text, image) => text.or(image),
+    }
+}
+
 fn next_paragraph_start(lines: &[Line<'_>], current: usize) -> Option<usize> {
     let mut index = current.min(lines.len());
     while index < lines.len() && !is_blank_line(&lines[index]) {
@@ -1520,6 +1537,26 @@ mod tests {
         assert_eq!(next_paragraph_start(&lines, 2), Some(3));
         assert_eq!(next_paragraph_start(&lines, 3), Some(7));
         assert_eq!(next_paragraph_start(&lines, 7), None);
+    }
+
+    #[test]
+    fn stops_at_image_tops_as_well_as_paragraphs() {
+        let lines = vec![
+            Line::from("first"),
+            Line::from(""),
+            Line::from(""),
+            Line::from(""),
+            Line::from("second"),
+        ];
+        let images = vec![ArticleImageLayout {
+            index: 0,
+            line: 2,
+            width: 10,
+            height: 2,
+        }];
+        assert_eq!(next_scroll_stop(&lines, &images, 0), Some(2));
+        assert_eq!(next_scroll_stop(&lines, &images, 1), Some(2));
+        assert_eq!(next_scroll_stop(&lines, &images, 2), Some(4));
     }
 
     #[test]
