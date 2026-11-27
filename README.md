@@ -11,7 +11,7 @@ Article reading view with headings, lists, and block quotes.
 
 ![Article reading view](screenshots/smallweb_2.webp)
 
-Inline article images rendered with truecolor half blocks.
+Inline article image rendering.
 
 ![Inline article image](screenshots/smallweb_3.webp)
 
@@ -118,9 +118,10 @@ Run `smallweb --list-themes` to list the built-in opaline theme ids.
 - Article extraction uses `dom_smoothie`, a Rust port of Mozilla Readability. Pages whose content
   is mostly JavaScript may produce little readable text; press `o` to read those in the browser.
 - Article images are off by default. Set `images = true` in the config or press `i` to enable them.
-  Enabled images are fetched in the background and rendered inline with truecolor half blocks.
-  Up to 12 images per article are loaded. Failed, oversized, or unsupported images (including SVG)
-  fall back to their alt text. Disabling images shows compact alt-text placeholders; an
-  in-progress image batch may finish in the background.
+  Enabled images are fetched in the background and rendered inline through `ratatui-image`, using
+  the Kitty, Sixel, or iTerm2 protocol when available and truecolor half blocks otherwise. Up to 12
+  images per article are loaded. Failed, oversized, or unsupported images (including SVG) fall back
+  to their alt text. Disabling images shows compact alt-text placeholders; an in-progress image
+  batch may finish in the background.
 - Only the Small Web blogs deck is used. Videos, code, comics, search, and river views are not
   implemented.

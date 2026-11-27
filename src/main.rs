@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use crossterm::event::{self, Event};
 use ratatui::DefaultTerminal;
+use ratatui_image::picker::Picker;
 
 use crate::app::App;
 
@@ -62,8 +63,15 @@ fn run() -> Result<()> {
         apply_theme(DEFAULT_THEME)?;
     }
 
-    let mut app = App::new(config, loaded.path, topics)?;
     let mut terminal = ratatui::init();
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    let mut app = match App::new(config, loaded.path, topics, picker) {
+        Ok(app) => app,
+        Err(error) => {
+            ratatui::restore();
+            return Err(error);
+        }
+    };
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
     result

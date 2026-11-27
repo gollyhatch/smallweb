@@ -2,11 +2,11 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::{Result, bail};
 use dom_smoothie::Readability;
+use ratatui_image::sliced::SlicedProtocol;
 use reqwest::Url;
 use scraper::node::Node;
 use scraper::{ElementRef, Html, Selector};
 
-#[derive(Debug, Clone)]
 pub struct Article {
     pub title: String,
     pub published: Option<String>,
@@ -16,11 +16,12 @@ pub struct Article {
     pub used_fallback: bool,
 }
 
-#[derive(Debug, Clone)]
 pub struct ArticleImage {
     pub url: String,
     pub alt: String,
     pub data: Option<Arc<image::RgbaImage>>,
+    pub protocol: Option<SlicedProtocol>,
+    pub protocol_width: Option<u16>,
     pub error: Option<String>,
     pub loading: bool,
 }
@@ -363,6 +364,8 @@ fn walk_element(
                     url: src,
                     alt: alt.clone(),
                     data: None,
+                    protocol: None,
+                    protocol_width: None,
                     error: None,
                     loading: false,
                 });

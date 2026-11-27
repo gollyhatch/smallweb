@@ -14,8 +14,12 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use opaline::Theme;
 use opaline::widgets::{ThemeSelectorAction, ThemeSelectorState};
+use ratatui::layout::Size;
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
+use ratatui_image::Resize;
+use ratatui_image::picker::Picker;
+use ratatui_image::sliced::SlicedProtocol;
 use reqwest::Url;
 
 use crate::api::{Api, FALLBACK_TOPICS, LikeOutcome, Post, Topic};
@@ -27,8 +31,9 @@ const QUEUE_TARGET: usize = 4;
 const HISTORY_LIMIT: usize = 100;
 const SEEN_LIMIT: usize = 200;
 const MAX_IMAGES: usize = 12;
-const MAX_IMAGE_WIDTH: u32 = 200;
-const MAX_IMAGE_HEIGHT: u32 = 400;
+const MAX_IMAGE_WIDTH: u32 = 1200;
+const MAX_IMAGE_HEIGHT: u32 = 1200;
+const MAX_IMAGE_ROWS: u16 = 28;
 const STATUS_TTL: Duration = Duration::from_secs(7);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +58,6 @@ pub struct Status {
     pub at: Instant,
 }
 
-#[derive(Debug)]
 pub enum ArticleState {
     Empty,
     Loading,
@@ -63,6 +67,7 @@ pub enum ArticleState {
 
 pub struct App {
     pub api: Api,
+    picker: Picker,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     pub config: Config,
@@ -80,6 +85,7 @@ pub struct App {
     pub status: Option<Status>,
     pub scroll: usize,
     pub article_lines: Vec<Line<'static>>,
+    pub article_images: Vec<ArticleImageLayout>,
     pub lines_width: u16,
     pub lines_theme: Option<Arc<Theme>>,
     pub article_height: usize,
@@ -103,7 +109,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, config_path: PathBuf, selected_topics: Vec<String>) -> Result<Self> {
+    pub fn new(
+        config: Config,
+        config_path: PathBuf,
+        selected_topics: Vec<String>,
+        picker: Picker,
+    ) -> Result<Self> {
         let api = Api::new()?;
         let (tx, rx) = mpsc::channel();
         let selected_topics: BTreeSet<String> = selected_topics
@@ -139,6 +150,7 @@ impl App {
             .collect();
         let mut app = Self {
             api,
+            picker,
             tx,
             rx,
             config,
@@ -156,6 +168,7 @@ impl App {
             status: None,
             scroll: 0,
             article_lines: Vec::new(),
+            article_images: Vec::new(),
             lines_width: 0,
             lines_theme: None,
             article_height: 10,
@@ -850,6 +863,7 @@ impl App {
     fn reset_article_view(&mut self) {
         self.scroll = 0;
         self.article_lines.clear();
+        self.article_images.clear();
         self.lines_width = 0;
         self.lines_theme = None;
     }
@@ -1088,6 +1102,40 @@ impl App {
         }
     }
 
+    pub fn prepare_image_protocols(&mut self, width: u16) {
+        if !self.config.images {
+            return;
+        }
+        let picker = self.picker.clone();
+        let ArticleState::Ready(article) = &mut self.article else {
+            return;
+        };
+        let target = Size::new(width.max(1), MAX_IMAGE_ROWS);
+        for image in &mut article.images {
+            if image.protocol_width == Some(width) {
+                continue;
+            }
+            let Some(data) = image.data.as_deref() else {
+                image.protocol = None;
+                image.protocol_width = None;
+                continue;
+            };
+            let source = image::DynamicImage::ImageRgba8((*data).clone());
+            match SlicedProtocol::new_with_resize(&picker, source, target, Resize::Fit(None)) {
+                Ok(protocol) => {
+                    image.protocol = Some(protocol);
+                    image.protocol_width = Some(width);
+                    image.error = None;
+                }
+                Err(error) => {
+                    image.protocol = None;
+                    image.protocol_width = Some(width);
+                    image.error = Some(error.to_string());
+                }
+            }
+        }
+    }
+
     fn toggle_images(&mut self) {
         self.config.images = !self.config.images;
         self.lines_width = 0;
@@ -1204,6 +1252,13 @@ impl App {
     }
 }
 
+pub struct ArticleImageLayout {
+    pub index: usize,
+    pub line: usize,
+    pub width: u16,
+    pub height: u16,
+}
+
 pub struct ArticleSearch {
     pub query: String,
     pub matches: Vec<usize>,
@@ -1284,7 +1339,6 @@ enum LikeAction {
     Unlike,
 }
 
-#[derive(Debug)]
 enum Msg {
     Deck {
         epoch: u64,
@@ -1332,10 +1386,12 @@ fn decode_image(bytes: Vec<u8>) -> Result<Arc<image::RgbaImage>> {
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let decoded = reader.decode().context("decoding image")?;
-    let thumbnail = decoded
-        .thumbnail(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT)
-        .to_rgba8();
-    Ok(Arc::new(thumbnail))
+    let decoded = if decoded.width() > MAX_IMAGE_WIDTH || decoded.height() > MAX_IMAGE_HEIGHT {
+        decoded.thumbnail(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT)
+    } else {
+        decoded
+    };
+    Ok(Arc::new(decoded.to_rgba8()))
 }
 
 fn fallback_topics() -> Vec<Topic> {
@@ -1537,7 +1593,7 @@ mod tests {
             .write_to(&mut encoded, image::ImageFormat::Png)
             .unwrap();
         let decoded = decode_image(encoded.into_inner()).unwrap();
-        assert_eq!((decoded.width(), decoded.height()), (200, 100));
+        assert_eq!((decoded.width(), decoded.height()), (400, 200));
     }
 
     #[test]

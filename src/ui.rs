@@ -10,13 +10,13 @@ use ratatui::widgets::{
     Block, BorderType, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Wrap,
 };
+use ratatui_image::sliced::{SignedPosition, SlicedImage};
 use textwrap::Options;
 
-use crate::app::{App, ArticleState, StatusKind, View, history_matches};
+use crate::app::{App, ArticleImageLayout, ArticleState, StatusKind, View, history_matches};
 use crate::article::{Article, ArticleImage, BlockKind};
 
 const MAX_TEXT_WIDTH: u16 = 100;
-const MAX_IMAGE_ROWS: u32 = 28;
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn render(app: &mut App, frame: &mut Frame<'_>) {
@@ -225,6 +225,32 @@ fn render_body(app: &mut App, frame: &mut Frame<'_>, area: Rect, theme: &Arc<The
                 line,
                 text_area.width,
             );
+        }
+    }
+
+    if app.config.images {
+        if let ArticleState::Ready(article) = &app.article {
+            for layout in &app.article_images {
+                if layout.width == 0 || layout.height == 0 {
+                    continue;
+                }
+                let relative_y = layout.line as isize - app.scroll as isize;
+                if relative_y >= area.height as isize || relative_y + layout.height as isize <= 0 {
+                    continue;
+                }
+                let Some(protocol) = article
+                    .images
+                    .get(layout.index)
+                    .and_then(|image| image.protocol.as_ref())
+                else {
+                    continue;
+                };
+                let x = text_area.x.saturating_sub(area.x)
+                    + text_area.width.saturating_sub(layout.width) / 2;
+                let y = relative_y.clamp(i16::MIN as isize, i16::MAX as isize) as i16;
+                let position = SignedPosition::from((x as i16, y));
+                frame.render_widget(SlicedImage::new(protocol, position), area);
+            }
         }
     }
 
@@ -638,12 +664,17 @@ fn ensure_article_lines(app: &mut App, width: u16, theme: &Arc<Theme>) {
     if same_theme && app.lines_width == width {
         return;
     }
-    app.article_lines = match &app.article {
+    if app.config.images {
+        app.prepare_image_protocols(width);
+    }
+    let (lines, images) = match &app.article {
         ArticleState::Ready(article) => {
             build_article_lines(article, width as usize, theme, app.config.images)
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), Vec::new()),
     };
+    app.article_lines = lines;
+    app.article_images = images;
     app.lines_width = width;
     app.lines_theme = Some(theme.clone());
     app.refresh_article_search();
@@ -654,7 +685,7 @@ fn build_article_lines(
     width: usize,
     theme: &Theme,
     images_enabled: bool,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<ArticleImageLayout>) {
     let width = width.max(10);
     let body = Style::default().fg(color(theme, "text.primary"));
     let heading = Style::default()
@@ -675,6 +706,7 @@ fn build_article_lines(
     let rule = Style::default().fg(color(theme, "border.unfocused"));
 
     let mut sink = LineSink::default();
+    let mut placed_images = Vec::new();
     let mut previous: Option<BlockKind> = None;
     for block in &article.blocks {
         if matches!(block.kind, BlockKind::Rule) {
@@ -729,7 +761,22 @@ fn build_article_lines(
                     };
                     wrap_lines(&mut sink, &message, width, "", "", caption);
                 } else if let Some(image) = article.images.get(index) {
-                    render_article_image(&mut sink, image, width, theme);
+                    if let Some(protocol) = &image.protocol {
+                        let size = protocol.size();
+                        let line = sink.lines.len();
+                        for _ in 0..size.height {
+                            sink.lines.push(Line::from(""));
+                        }
+                        sink.last_blank = false;
+                        placed_images.push(ArticleImageLayout {
+                            index,
+                            line,
+                            width: size.width,
+                            height: size.height,
+                        });
+                    } else {
+                        render_image_placeholder(&mut sink, image, width, theme);
+                    }
                 } else if !block.text.is_empty() {
                     wrap_lines(&mut sink, &block.text, width, "  ", "  ", caption);
                 }
@@ -738,98 +785,32 @@ fn build_article_lines(
         }
         previous = Some(block.kind);
     }
-    while sink
-        .lines
-        .last()
-        .is_some_and(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
-    {
-        sink.lines.pop();
-    }
-    sink.lines
+    (sink.lines, placed_images)
 }
 
-fn render_article_image(sink: &mut LineSink, image: &ArticleImage, width: usize, theme: &Theme) {
+fn render_image_placeholder(
+    sink: &mut LineSink,
+    image: &ArticleImage,
+    width: usize,
+    theme: &Theme,
+) {
     let caption = Style::default()
         .fg(color(theme, "text.muted"))
         .add_modifier(Modifier::ITALIC);
-    let Some(data) = image.data.as_deref() else {
-        let alt = if image.alt.is_empty() {
-            "image"
-        } else {
-            image.alt.as_str()
-        };
-        let (message, style) = match image.error.as_deref() {
-            Some(error) => (
-                format!("[image: {alt} — {error}]"),
-                Style::default().fg(color(theme, "warning")),
-            ),
-            None => (format!("[image: {alt} — loading…]"), caption),
-        };
-        wrap_lines(sink, &message, width, "", "", style);
-        return;
+    let alt = if image.alt.is_empty() {
+        "image"
+    } else {
+        image.alt.as_str()
     };
-
-    if data.width() <= 2 || data.height() <= 2 {
-        return;
-    }
-
-    let max_width = width.max(1) as u32;
-    let mut target_w = max_width.min(data.width().max(1));
-    let aspect = data.height() as f64 / data.width().max(1) as f64;
-    let mut target_h = (target_w as f64 * aspect).round().max(1.0) as u32;
-    let max_h = MAX_IMAGE_ROWS * 2;
-    if target_h > max_h {
-        let scale = max_h as f64 / target_h as f64;
-        target_w = ((target_w as f64 * scale).round() as u32).max(1);
-        target_h = max_h;
-    }
-    target_h += target_h % 2;
-
-    let resized = image::imageops::resize(
-        data,
-        target_w,
-        target_h,
-        image::imageops::FilterType::Triangle,
-    );
-    let background = color(theme, "bg.base");
-    let left_pad = width.saturating_sub(target_w as usize) / 2;
-    let padding = " ".repeat(left_pad);
-    for y in (0..target_h).step_by(2) {
-        let mut spans = Vec::with_capacity(target_w as usize + 1);
-        if left_pad > 0 {
-            spans.push(Span::raw(padding.clone()));
-        }
-        for x in 0..target_w {
-            let upper = resized.get_pixel(x, y);
-            let lower = resized.get_pixel(x, y + 1);
-            spans.push(Span::styled(
-                "▀",
-                Style::default()
-                    .fg(blend_pixel(upper, background))
-                    .bg(blend_pixel(lower, background)),
-            ));
-        }
-        sink.push(Line::from(spans));
-    }
-}
-
-fn blend_pixel(pixel: &image::Rgba<u8>, background: Color) -> Color {
-    let [red, green, blue, alpha] = pixel.0;
-    let (bg_red, bg_green, bg_blue) = match background {
-        Color::Rgb(red, green, blue) => (red, green, blue),
-        _ => (0, 0, 0),
+    let (message, style) = match (image.error.as_deref(), image.data.is_some()) {
+        (Some(error), _) => (
+            format!("[image: {alt} — {error}]"),
+            Style::default().fg(color(theme, "warning")),
+        ),
+        (None, true) => (format!("[image: {alt} — preparing…]"), caption),
+        (None, false) => (format!("[image: {alt} — loading…]"), caption),
     };
-    if alpha == 255 {
-        return Color::Rgb(red, green, blue);
-    }
-    let blend = |foreground: u8, background: u8| {
-        ((foreground as u32 * alpha as u32 + background as u32 * (255 - alpha) as u32) / 255) as u8
-    };
-    Color::Rgb(
-        blend(red, bg_red),
-        blend(green, bg_green),
-        blend(blue, bg_blue),
-    )
+    wrap_lines(sink, &message, width, "", "", style);
 }
 
 fn needs_gap(previous: Option<BlockKind>, current: BlockKind) -> bool {
@@ -993,7 +974,8 @@ mod tests {
     #[test]
     fn builds_wrapped_lines_with_structure() {
         let theme = Theme::default();
-        let lines = build_article_lines(&article(), 32, &theme, false);
+        let (lines, images) = build_article_lines(&article(), 32, &theme, false);
+        assert!(images.is_empty());
         assert!(lines.len() > 8);
         assert!(
             lines
@@ -1026,15 +1008,27 @@ mod tests {
     }
 
     #[test]
-    fn renders_images_as_half_blocks() {
+    fn lays_out_images_from_ratatui_image_protocols() {
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            64,
+            32,
+            image::Rgba([255, 0, 0, 255]),
+        ));
+        let protocol = ratatui_image::sliced::SlicedProtocol::new_with_resize(
+            &picker,
+            source,
+            ratatui::layout::Size::new(20, 10),
+            ratatui_image::Resize::Fit(None),
+        )
+        .unwrap();
+        let size = protocol.size();
         let image = ArticleImage {
             url: "https://example.com/image.png".to_string(),
             alt: "Test image".to_string(),
-            data: Some(Arc::new(image::RgbaImage::from_pixel(
-                4,
-                4,
-                image::Rgba([255, 0, 0, 255]),
-            ))),
+            data: None,
+            protocol: Some(protocol),
+            protocol_width: Some(20),
             error: None,
             loading: false,
         };
@@ -1046,15 +1040,11 @@ mod tests {
         }];
         article.images = vec![image];
 
-        let lines = build_article_lines(&article, 20, &Theme::default(), true);
-        assert!(lines.iter().any(|line| line.to_string().contains('▀')));
-        let red = Color::Rgb(255, 0, 0);
-        assert!(
-            lines
-                .iter()
-                .flat_map(|line| &line.spans)
-                .any(|span| { span.style.fg == Some(red) && span.style.bg == Some(red) })
-        );
+        let (lines, images) = build_article_lines(&article, 20, &Theme::default(), true);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].width, size.width);
+        assert_eq!(images[0].height, size.height);
+        assert!(lines.len() >= size.height as usize);
     }
 
     #[test]
@@ -1069,10 +1059,13 @@ mod tests {
             url: String::new(),
             alt: "Missing".to_string(),
             data: None,
+            protocol: None,
+            protocol_width: None,
             error: Some("HTTP 404".to_string()),
             loading: false,
         }];
-        let lines = build_article_lines(&article, 40, &Theme::default(), true);
+        let (lines, images) = build_article_lines(&article, 40, &Theme::default(), true);
+        assert!(images.is_empty());
         assert!(
             lines
                 .iter()
@@ -1096,16 +1089,18 @@ mod tests {
                 4,
                 image::Rgba([255, 0, 0, 255]),
             ))),
+            protocol: None,
+            protocol_width: None,
             error: None,
             loading: false,
         }];
-        let lines = build_article_lines(&article, 40, &Theme::default(), false);
+        let (lines, images) = build_article_lines(&article, 40, &Theme::default(), false);
+        assert!(images.is_empty());
         assert!(
             lines
                 .iter()
                 .any(|line| line.to_string().contains("[image: Test image]"))
         );
-        assert!(!lines.iter().any(|line| line.to_string().contains('▀')));
     }
 
     #[test]
