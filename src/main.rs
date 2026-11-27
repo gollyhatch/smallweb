@@ -227,6 +227,6 @@ Config example:
   images = false                   # default off; toggle at runtime with \"i\"
   topics = [\"programming\", \"science\"]
 
-Keys: n next · b back · l like · F flag · y copy URL · o open · S share · i images · H history · t topics · T theme · ? help · q quit"
+Keys: n next · b back · l like · F flag · y copy URL · Y Small Web URL · o open · S share · i images · H history · t topics · T theme · ? help · q quit"
     );
 }

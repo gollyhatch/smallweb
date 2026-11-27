@@ -15,6 +15,7 @@ use opaline::Theme;
 use opaline::widgets::{ThemeSelectorAction, ThemeSelectorState};
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
+use reqwest::Url;
 
 use crate::api::{Api, FALLBACK_TOPICS, LikeOutcome, Post, Topic};
 use crate::article::{self, Article};
@@ -514,6 +515,7 @@ impl App {
             KeyCode::Char('l') => self.toggle_like_current(),
             KeyCode::Char('F') => self.flag_current(),
             KeyCode::Char('y') => self.copy_current_url(),
+            KeyCode::Char('Y') => self.copy_smallweb_url(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
             KeyCode::Char('S') => self.share_current(),
             KeyCode::Char('i') => self.toggle_images(),
@@ -892,8 +894,20 @@ impl App {
             self.set_status(StatusKind::Warning, "No post to copy");
             return;
         };
-        match copy_to_clipboard(&mut self.clipboard, &url) {
-            Ok(()) => self.set_status(StatusKind::Success, "Original URL copied"),
+        self.copy_url(&url, "Original URL copied");
+    }
+
+    fn copy_smallweb_url(&mut self) {
+        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            self.set_status(StatusKind::Warning, "No post to copy");
+            return;
+        };
+        self.copy_url(&smallweb_url(&url), "Smallweb URL copied");
+    }
+
+    fn copy_url(&mut self, url: &str, success: &str) {
+        match copy_to_clipboard(&mut self.clipboard, url) {
+            Ok(()) => self.set_status(StatusKind::Success, success),
             Err(error) => self.set_status(StatusKind::Error, format!("Copy failed: {error}")),
         }
     }
@@ -1141,6 +1155,12 @@ fn format_error(error: anyhow::Error) -> String {
     format!("{error:#}")
 }
 
+fn smallweb_url(post_url: &str) -> String {
+    let mut url = Url::parse("https://kagi.com/smallweb/").expect("valid Smallweb URL");
+    url.query_pairs_mut().append_pair("url", post_url);
+    url.to_string()
+}
+
 fn decode_image(bytes: Vec<u8>) -> Result<Arc<image::RgbaImage>> {
     let mut reader = image::ImageReader::new(Cursor::new(&bytes))
         .with_guessed_format()
@@ -1368,6 +1388,14 @@ mod tests {
         let results = history_matches(&posts, "");
         assert_eq!(results[0].title, "new");
         assert_eq!(results[1].title, "old");
+    }
+
+    #[test]
+    fn builds_smallweb_url_with_encoded_post_url() {
+        assert_eq!(
+            smallweb_url("https://example.com/a?x=1&y=2"),
+            "https://kagi.com/smallweb/?url=https%3A%2F%2Fexample.com%2Fa%3Fx%3D1%26y%3D2"
+        );
     }
 
     #[test]

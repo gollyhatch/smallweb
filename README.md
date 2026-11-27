@@ -27,6 +27,7 @@ cargo install --path .
 | `l` | Toggle like on the current post (sent to Kagi) |
 | `F` | Flag the current post as inappropriate (sent to Kagi) |
 | `y` | Copy the original URL |
+| `Y` | Copy the Small Web URL for the post |
 | `o`, `Enter` | Open the original post in the configured browser |
 | `S` | Run the configured share command with the post URL |
 | `i` | Toggle inline images |
