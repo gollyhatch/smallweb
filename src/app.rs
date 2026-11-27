@@ -16,7 +16,7 @@ use ratatui::widgets::ListState;
 
 use crate::api::{Api, FALLBACK_TOPICS, LikeOutcome, Post, Topic};
 use crate::article::{self, Article};
-use crate::config::Config;
+use crate::config::{Config, save_topics};
 
 const QUEUE_TARGET: usize = 4;
 const STATUS_TTL: Duration = Duration::from_secs(7);
@@ -325,11 +325,22 @@ impl App {
                 self.view = View::Reader;
             }
             KeyCode::Enter => {
+                let topics: Vec<String> = self.topic_draft.iter().cloned().collect();
+                let save_result = save_topics(&self.config_path, &topics);
                 self.selected_topics = self.topic_draft.clone();
+                self.config.topics = topics;
                 self.view = View::Reader;
                 let label = self.filter_label();
-                self.set_status(StatusKind::Success, format!("Filter: {label}"));
                 self.refresh_feed();
+                match save_result {
+                    Ok(()) => {
+                        self.set_status(StatusKind::Success, format!("Filter saved: {label}"))
+                    }
+                    Err(error) => self.set_status(
+                        StatusKind::Error,
+                        format!("Filter: {label}; could not save config: {error}"),
+                    ),
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let current = self.topic_list.selected().unwrap_or(0);

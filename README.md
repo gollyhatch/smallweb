@@ -38,8 +38,9 @@ cargo install --path .
 | `?` | Help |
 | `q` | Quit (also `Ctrl+C`) |
 
-In the topic picker: `Space` toggles, `a` selects all, `c` clears, `Enter` applies, and `Esc`
-cancels. Selected topics are ORed; an empty selection means all topics.
+In the topic picker: `Space` toggles, `a` selects all, `c` clears, `Enter` applies and saves the
+selection to `config.toml`, and `Esc` cancels. Selected topics are ORed; an empty selection means
+all topics.
 
 ## Configuration
 
@@ -56,7 +57,8 @@ browser = "firefox --new-tab"
 # Optional share command. Receives the post URL as its argument.
 share = "toot post"
 
-# Optional initial topic filter. Empty or omitted means all topics.
+# Initial topic filter. Applying a selection with `t` writes it back here.
+# Empty or omitted means all topics.
 topics = ["programming", "science"]
 ```
 

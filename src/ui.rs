@@ -347,7 +347,7 @@ fn render_topics(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
             muted_style(theme),
         )),
         Line::from(Span::styled(
-            "Applied filters stay until changed; Enter applies the draft.",
+            "Enter applies the draft and saves it to the config file.",
             Style::default().fg(color(theme, "text.dim")),
         )),
     ]);

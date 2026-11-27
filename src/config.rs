@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,44 @@ pub struct Config {
     pub share: Option<String>,
     /// Topic slugs selected at startup. Empty means "all topics".
     pub topics: Vec<String>,
+}
+
+pub fn save_topics(path: &Path, topics: &[String]) -> Result<()> {
+    let existing = if path.exists() {
+        Some(
+            fs::read_to_string(path)
+                .with_context(|| format!("reading config {}", path.display()))?,
+        )
+    } else {
+        None
+    };
+    let rendered = render_topics(existing.as_deref(), topics)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating config directory {}", parent.display()))?;
+    }
+    fs::write(path, rendered).with_context(|| format!("writing config {}", path.display()))?;
+    Ok(())
+}
+
+fn render_topics(existing: Option<&str>, topics: &[String]) -> Result<String> {
+    let mut document = existing
+        .unwrap_or_default()
+        .parse::<toml_edit::DocumentMut>()
+        .context("parsing existing config")?;
+    let mut array = toml_edit::Array::new();
+    for topic in topics {
+        array.push(topic.as_str());
+    }
+    document["topics"] = toml_edit::value(array);
+    let mut rendered = document.to_string();
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    Ok(rendered)
 }
 
 #[derive(Debug)]
@@ -110,6 +148,29 @@ fn default_browser() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saves_topics_without_dropping_comments_or_other_keys() {
+        let existing = r#"# keep this comment
+theme = "nord"
+topics = ["old"]
+browser = "firefox"
+"#;
+        let rendered = render_topics(Some(existing), &["science".into(), "web".into()]).unwrap();
+        assert!(rendered.contains("# keep this comment"));
+        assert!(rendered.contains("theme = \"nord\""));
+        assert!(rendered.contains("browser = \"firefox\""));
+        assert!(rendered.contains("topics = [\"science\", \"web\"]"));
+        let config: Config = toml::from_str(&rendered).unwrap();
+        assert_eq!(config.topics, ["science", "web"]);
+    }
+
+    #[test]
+    fn creates_topics_in_an_empty_document() {
+        let rendered = render_topics(None, &[]).unwrap();
+        let config: Config = toml::from_str(&rendered).unwrap();
+        assert!(config.topics.is_empty());
+    }
 
     #[test]
     fn parses_minimal_config() {
