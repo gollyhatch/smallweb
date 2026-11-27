@@ -16,7 +16,7 @@ use ratatui::widgets::ListState;
 
 use crate::api::{Api, FALLBACK_TOPICS, LikeOutcome, Post, Topic};
 use crate::article::{self, Article};
-use crate::config::{Config, save_topics};
+use crate::config::{Config, save_theme, save_topics};
 
 const QUEUE_TARGET: usize = 4;
 const HISTORY_LIMIT: usize = 100;
@@ -308,12 +308,20 @@ impl App {
             (selector.handle_key(key), selector.selected_theme().cloned())
         };
         match action {
-            ThemeSelectorAction::Select(_) => {
+            ThemeSelectorAction::Select(id) => {
                 self.theme_selector = None;
+                let save_result = save_theme(&self.config_path, &id);
+                self.config.theme = Some(id);
                 let name = selected
                     .map(|theme| theme.display_name)
                     .unwrap_or_else(|| opaline::current().meta.name.clone());
-                self.set_status(StatusKind::Success, format!("Theme: {name}"));
+                match save_result {
+                    Ok(()) => self.set_status(StatusKind::Success, format!("Theme saved: {name}")),
+                    Err(error) => self.set_status(
+                        StatusKind::Error,
+                        format!("Theme: {name}; could not save config: {error}"),
+                    ),
+                }
             }
             ThemeSelectorAction::Cancel => {
                 self.theme_selector = None;

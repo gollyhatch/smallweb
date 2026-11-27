@@ -442,7 +442,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("o / enter", "open the original post in your browser"),
         ("S", "run the configured share command with the post URL"),
         ("t", "choose topics"),
-        ("T", "choose a theme (live preview)"),
+        ("T", "choose and save a theme (live preview)"),
         ("j / k", "scroll one line"),
         ("d / u", "scroll half a page down / up"),
         ("space / pgdn", "page down"),

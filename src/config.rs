@@ -21,15 +21,27 @@ pub struct Config {
 }
 
 pub fn save_topics(path: &Path, topics: &[String]) -> Result<()> {
-    let existing = if path.exists() {
-        Some(
-            fs::read_to_string(path)
-                .with_context(|| format!("reading config {}", path.display()))?,
-        )
-    } else {
-        None
-    };
+    let existing = read_existing(path)?;
     let rendered = render_topics(existing.as_deref(), topics)?;
+    write_config(path, rendered)
+}
+
+pub fn save_theme(path: &Path, theme: &str) -> Result<()> {
+    let existing = read_existing(path)?;
+    let rendered = render_theme(existing.as_deref(), theme)?;
+    write_config(path, rendered)
+}
+
+fn read_existing(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(fs::read_to_string(path).with_context(|| {
+        format!("reading config {}", path.display())
+    })?))
+}
+
+fn write_config(path: &Path, rendered: String) -> Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -42,15 +54,29 @@ pub fn save_topics(path: &Path, topics: &[String]) -> Result<()> {
 }
 
 fn render_topics(existing: Option<&str>, topics: &[String]) -> Result<String> {
-    let mut document = existing
-        .unwrap_or_default()
-        .parse::<toml_edit::DocumentMut>()
-        .context("parsing existing config")?;
+    let mut document = parse_document(existing)?;
     let mut array = toml_edit::Array::new();
     for topic in topics {
         array.push(topic.as_str());
     }
     document["topics"] = toml_edit::value(array);
+    render_document(document)
+}
+
+fn render_theme(existing: Option<&str>, theme: &str) -> Result<String> {
+    let mut document = parse_document(existing)?;
+    document["theme"] = toml_edit::value(theme);
+    render_document(document)
+}
+
+fn parse_document(existing: Option<&str>) -> Result<toml_edit::DocumentMut> {
+    existing
+        .unwrap_or_default()
+        .parse::<toml_edit::DocumentMut>()
+        .context("parsing existing config")
+}
+
+fn render_document(document: toml_edit::DocumentMut) -> Result<String> {
     let mut rendered = document.to_string();
     if !rendered.ends_with('\n') {
         rendered.push('\n');
@@ -163,6 +189,20 @@ browser = "firefox"
         assert!(rendered.contains("topics = [\"science\", \"web\"]"));
         let config: Config = toml::from_str(&rendered).unwrap();
         assert_eq!(config.topics, ["science", "web"]);
+    }
+
+    #[test]
+    fn saves_theme_without_dropping_comments_or_other_keys() {
+        let existing = r#"# keep this comment
+theme = "nord"
+topics = ["science"]
+"#;
+        let rendered = render_theme(Some(existing), "catppuccin-mocha").unwrap();
+        assert!(rendered.contains("# keep this comment"));
+        assert!(rendered.contains("theme = \"catppuccin-mocha\""));
+        assert!(rendered.contains("topics = [\"science\"]"));
+        let config: Config = toml::from_str(&rendered).unwrap();
+        assert_eq!(config.theme.as_deref(), Some("catppuccin-mocha"));
     }
 
     #[test]
