@@ -5,6 +5,20 @@ Small Web's deck, extracts the article with [Readability](https://crates.io/crat
 and renders it as readable text in a [ratatui](https://ratatui.rs) interface themed by
 [opaline](https://crates.io/crates/opaline).
 
+## Screenshots
+
+Article reading view with headings, lists, and block quotes.
+
+![Article reading view](screenshots/smallweb_2.webp)
+
+Inline article images rendered with truecolor half blocks.
+
+![Inline article image](screenshots/smallweb_3.webp)
+
+Built-in key help overlay.
+
+![Key help overlay](screenshots/smallweb_1.webp)
+
 ## Build
 
 ```sh
