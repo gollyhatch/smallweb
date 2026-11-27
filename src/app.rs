@@ -220,14 +220,21 @@ impl App {
                                 image.error = Some("image limit reached".to_string());
                             }
                         }
-                        let jobs: Vec<(usize, String)> = article
-                            .images
-                            .iter()
-                            .enumerate()
-                            .take(MAX_IMAGES)
-                            .filter(|(_, image)| !image.url.is_empty())
-                            .map(|(index, image)| (index, image.url.clone()))
-                            .collect();
+                        let mut jobs = Vec::new();
+                        if self.config.images {
+                            for (index, image) in
+                                article.images.iter_mut().enumerate().take(MAX_IMAGES)
+                            {
+                                if !image.url.is_empty()
+                                    && !image.loading
+                                    && image.data.is_none()
+                                    && image.error.is_none()
+                                {
+                                    image.loading = true;
+                                    jobs.push((index, image.url.clone()));
+                                }
+                            }
+                        }
                         let referer = article.url.clone();
                         self.article = ArticleState::Ready(article);
                         self.reset_article_view();
@@ -268,6 +275,7 @@ impl App {
                 }
                 if let ArticleState::Ready(article) = &mut self.article {
                     if let Some(image) = article.images.get_mut(index) {
+                        image.loading = false;
                         match result {
                             Ok(data) => {
                                 image.data = Some(data);
@@ -441,6 +449,7 @@ impl App {
             KeyCode::Char('y') => self.copy_current_url(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
             KeyCode::Char('S') => self.share_current(),
+            KeyCode::Char('i') => self.toggle_images(),
             KeyCode::Char('t') => self.open_topics(),
             KeyCode::Char('T') => self.open_themes(),
             KeyCode::Char('?') | KeyCode::F(1) => self.view = View::Help,
@@ -699,6 +708,44 @@ impl App {
         match run_command_with_url(&command, &url) {
             Ok(()) => self.set_status(StatusKind::Success, format!("Shared with {command}")),
             Err(error) => self.set_status(StatusKind::Error, format!("Share failed: {error}")),
+        }
+    }
+
+    fn toggle_images(&mut self) {
+        self.config.images = !self.config.images;
+        self.lines_width = 0;
+        if self.config.images {
+            self.start_current_images();
+            self.set_status(StatusKind::Info, "Images on");
+        } else {
+            self.set_status(StatusKind::Info, "Images off");
+        }
+    }
+
+    fn start_current_images(&mut self) {
+        if !self.config.images {
+            return;
+        }
+        let Some(article_url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            return;
+        };
+        let ArticleState::Ready(article) = &mut self.article else {
+            return;
+        };
+        let referer = article.url.clone();
+        let mut jobs = Vec::new();
+        for (index, image) in article.images.iter_mut().enumerate().take(MAX_IMAGES) {
+            if !image.url.is_empty()
+                && !image.loading
+                && image.data.is_none()
+                && image.error.is_none()
+            {
+                image.loading = true;
+                jobs.push((index, image.url.clone()));
+            }
+        }
+        if !jobs.is_empty() {
+            self.spawn_images(article_url, referer, jobs);
         }
     }
 

@@ -22,6 +22,7 @@ pub struct ArticleImage {
     pub alt: String,
     pub data: Option<Arc<image::RgbaImage>>,
     pub error: Option<String>,
+    pub loading: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -363,6 +364,7 @@ fn walk_element(
                     alt: alt.clone(),
                     data: None,
                     error: None,
+                    loading: false,
                 });
                 push(blocks, BlockKind::Image(index), alt, quote);
             } else if !alt.is_empty() {

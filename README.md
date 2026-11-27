@@ -28,6 +28,7 @@ cargo install --path .
 | `y` | Copy the original URL |
 | `o`, `Enter` | Open the original post in the configured browser |
 | `S` | Run the configured share command with the post URL |
+| `i` | Toggle inline images |
 | `t` | Select topics to filter random posts |
 | `T` | Theme picker with live preview; selection is saved |
 | `j`/`k`, `↑`/`↓` | Scroll one line |
@@ -63,6 +64,9 @@ browser = "firefox --new-tab"
 # Optional share command. Receives the post URL as its argument.
 share = "toot post"
 
+# Render article images inline. Default: false. Toggle at runtime with `i`.
+images = false
+
 # Initial topic filter. Applying a selection with `t` writes it back here.
 # Empty or omitted means all topics.
 topics = ["programming", "science"]
@@ -81,8 +85,10 @@ Run `smallweb --list-themes` to list the built-in opaline theme ids.
   Likes are real reactions sent to Kagi.
 - Article extraction uses `dom_smoothie`, a Rust port of Mozilla Readability. Pages whose content
   is mostly JavaScript may produce little readable text; press `o` to read those in the browser.
-- Article images are fetched in the background and rendered inline with truecolor half blocks.
+- Article images are off by default. Set `images = true` in the config or press `i` to enable them.
+  Enabled images are fetched in the background and rendered inline with truecolor half blocks.
   Up to 12 images per article are loaded. Failed, oversized, or unsupported images (including SVG)
-  fall back to their alt text.
+  fall back to their alt text. Disabling images shows compact alt-text placeholders; an
+  in-progress image batch may finish in the background.
 - Only the Small Web blogs deck is used. Videos, code, comics, search, and river views are not
   implemented.

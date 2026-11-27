@@ -287,6 +287,8 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         Span::styled(" open  ", label),
         Span::styled("S", key),
         Span::styled(" share  ", label),
+        Span::styled("i", key),
+        Span::styled(" images  ", label),
         Span::styled("t", key),
         Span::styled(" topics  ", label),
         Span::styled("T", key),
@@ -442,6 +444,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("y", "copy the original URL"),
         ("o / enter", "open the original post in your browser"),
         ("S", "run the configured share command with the post URL"),
+        ("i", "toggle inline images"),
         ("t", "choose topics"),
         ("T", "choose and save a theme (live preview)"),
         ("j / k", "scroll one line"),
@@ -482,14 +485,21 @@ fn ensure_article_lines(app: &mut App, width: u16, theme: &Arc<Theme>) {
         return;
     }
     app.article_lines = match &app.article {
-        ArticleState::Ready(article) => build_article_lines(article, width as usize, theme),
+        ArticleState::Ready(article) => {
+            build_article_lines(article, width as usize, theme, app.config.images)
+        }
         _ => Vec::new(),
     };
     app.lines_width = width;
     app.lines_theme = Some(theme.clone());
 }
 
-fn build_article_lines(article: &Article, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+fn build_article_lines(
+    article: &Article,
+    width: usize,
+    theme: &Theme,
+    images_enabled: bool,
+) -> Vec<Line<'static>> {
     let width = width.max(10);
     let body = Style::default().fg(color(theme, "text.primary"));
     let heading = Style::default()
@@ -551,7 +561,19 @@ fn build_article_lines(article: &Article, width: usize, theme: &Theme) -> Vec<Li
                 wrap_lines(&mut sink, &block.text, width, "  ", "  ", style);
             }
             BlockKind::Image(index) => {
-                if let Some(image) = article.images.get(index) {
+                if !images_enabled {
+                    let alt = article
+                        .images
+                        .get(index)
+                        .map(|image| image.alt.as_str())
+                        .unwrap_or(&block.text);
+                    let message = if alt.is_empty() {
+                        "[image]".to_string()
+                    } else {
+                        format!("[image: {alt}]")
+                    };
+                    wrap_lines(&mut sink, &message, width, "", "", caption);
+                } else if let Some(image) = article.images.get(index) {
                     render_article_image(&mut sink, image, width, theme);
                 } else if !block.text.is_empty() {
                     wrap_lines(&mut sink, &block.text, width, "  ", "  ", caption);
@@ -816,7 +838,7 @@ mod tests {
     #[test]
     fn builds_wrapped_lines_with_structure() {
         let theme = Theme::default();
-        let lines = build_article_lines(&article(), 32, &theme);
+        let lines = build_article_lines(&article(), 32, &theme, false);
         assert!(lines.len() > 8);
         assert!(
             lines
@@ -859,6 +881,7 @@ mod tests {
                 image::Rgba([255, 0, 0, 255]),
             ))),
             error: None,
+            loading: false,
         };
         let mut article = article();
         article.blocks = vec![Block {
@@ -868,7 +891,7 @@ mod tests {
         }];
         article.images = vec![image];
 
-        let lines = build_article_lines(&article, 20, &Theme::default());
+        let lines = build_article_lines(&article, 20, &Theme::default(), true);
         assert!(lines.iter().any(|line| line.to_string().contains('▀')));
         let red = Color::Rgb(255, 0, 0);
         assert!(
@@ -892,13 +915,42 @@ mod tests {
             alt: "Missing".to_string(),
             data: None,
             error: Some("HTTP 404".to_string()),
+            loading: false,
         }];
-        let lines = build_article_lines(&article, 40, &Theme::default());
+        let lines = build_article_lines(&article, 40, &Theme::default(), true);
         assert!(
             lines
                 .iter()
                 .any(|line| line.to_string().contains("HTTP 404"))
         );
+    }
+
+    #[test]
+    fn hides_images_with_alt_placeholders_when_disabled() {
+        let mut article = article();
+        article.blocks = vec![Block {
+            kind: BlockKind::Image(0),
+            text: "Test image".to_string(),
+            quote: false,
+        }];
+        article.images = vec![ArticleImage {
+            url: "https://example.com/image.png".to_string(),
+            alt: "Test image".to_string(),
+            data: Some(Arc::new(image::RgbaImage::from_pixel(
+                4,
+                4,
+                image::Rgba([255, 0, 0, 255]),
+            ))),
+            error: None,
+            loading: false,
+        }];
+        let lines = build_article_lines(&article, 40, &Theme::default(), false);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains("[image: Test image]"))
+        );
+        assert!(!lines.iter().any(|line| line.to_string().contains('▀')));
     }
 
     #[test]

@@ -16,6 +16,8 @@ pub struct Config {
     /// Command used to share the original post. The URL is appended unless the
     /// command contains `{}` or `%s` as a placeholder. Optional.
     pub share: Option<String>,
+    /// Render article images. Defaults to off; toggle at runtime with `i`.
+    pub images: bool,
     /// Topic slugs selected at startup. Empty means "all topics".
     pub topics: Vec<String>,
 }
@@ -219,6 +221,7 @@ topics = ["science"]
 theme = "nord"
 browser = "firefox --new-tab"
 share = "toot post"
+images = true
 topics = ["programming", "science"]
 "#,
         )
@@ -226,6 +229,13 @@ topics = ["programming", "science"]
         assert_eq!(config.theme.as_deref(), Some("nord"));
         assert_eq!(config.share.as_deref(), Some("toot post"));
         assert_eq!(config.share_command().as_deref(), Some("toot post"));
+        assert!(config.images);
         assert_eq!(config.topics, ["programming", "science"]);
+    }
+
+    #[test]
+    fn images_default_to_off() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.images);
     }
 }
