@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -21,21 +22,32 @@ struct HistoryFile<'a> {
     back: &'a [Post],
 }
 
-pub fn path_for_config(config_path: &Path) -> PathBuf {
+pub fn default_path() -> PathBuf {
+    if let Some(path) = env::var_os("SMALLWEB_HISTORY") {
+        return PathBuf::from(path);
+    }
+    let state_home = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    state_home.join("smallweb").join("history.json")
+}
+
+pub fn legacy_path(config_path: &Path) -> PathBuf {
     config_path.with_extension("history.json")
 }
 
-pub fn load(config_path: &Path) -> Result<StoredHistory> {
-    let path = path_for_config(config_path);
+pub fn load(path: &Path) -> Result<Option<StoredHistory>> {
     if !path.exists() {
-        return Ok(StoredHistory::default());
+        return Ok(None);
     }
-    let data = fs::read(&path).with_context(|| format!("reading history {}", path.display()))?;
-    serde_json::from_slice(&data).with_context(|| format!("parsing history {}", path.display()))
+    let data = fs::read(path).with_context(|| format!("reading history {}", path.display()))?;
+    let history = serde_json::from_slice(&data)
+        .with_context(|| format!("parsing history {}", path.display()))?;
+    Ok(Some(history))
 }
 
-pub fn save(config_path: &Path, seen: &[Post], back: &[Post]) -> Result<()> {
-    let path = path_for_config(config_path);
+pub fn save(path: &Path, seen: &[Post], back: &[Post]) -> Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -49,11 +61,11 @@ pub fn save(config_path: &Path, seen: &[Post], back: &[Post]) -> Result<()> {
     let _ = fs::remove_file(&temp);
     write_private(&temp, &data).with_context(|| format!("writing history {}", temp.display()))?;
 
-    if let Err(error) = fs::rename(&temp, &path) {
+    if let Err(error) = fs::rename(&temp, path) {
         if path.exists() {
-            fs::remove_file(&path)
+            fs::remove_file(path)
                 .with_context(|| format!("replacing history {}", path.display()))?;
-            fs::rename(&temp, &path)
+            fs::rename(&temp, path)
                 .with_context(|| format!("writing history {}", path.display()))?;
         } else {
             return Err(error).with_context(|| format!("writing history {}", path.display()));
@@ -124,9 +136,9 @@ mod tests {
     }
 
     #[test]
-    fn history_file_sits_next_to_the_config() {
+    fn legacy_history_file_sits_next_to_the_config() {
         assert_eq!(
-            path_for_config(Path::new("/tmp/smallweb/config.toml")),
+            legacy_path(Path::new("/tmp/smallweb/config.toml")),
             PathBuf::from("/tmp/smallweb/config.history.json")
         );
     }
@@ -156,23 +168,19 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(&directory).unwrap();
-        let config_path = directory.join("config.toml");
         let seen = vec![post("seen", "https://example.com/seen")];
         let back = vec![post("back", "https://example.com/back")];
 
-        save(&config_path, &seen, &back).unwrap();
-        let loaded = load(&config_path).unwrap();
+        let history_path = directory.join("history.json");
+        save(&history_path, &seen, &back).unwrap();
+        let loaded = load(&history_path).unwrap().unwrap();
         assert_eq!(loaded.seen, seen);
         assert_eq!(loaded.back, back);
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(path_for_config(&config_path))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777;
+            let mode = fs::metadata(&history_path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
 

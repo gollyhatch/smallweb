@@ -53,9 +53,11 @@ walks back through the posts you have viewed. `H` opens a fuzzy-searchable histo
 filter and rank by title, domain, author, URL, or topic; select with `↑`/`↓`; `Enter` opens the
 post in the browser; `Ctrl+S` shares it with the configured share command.
 
-Seen-post history and the back stack are persisted next to the config in
-`config.history.json` (for example `~/.config/smallweb/config.history.json`). The file is written
-with user-only permissions on Unix and keeps up to 200 seen posts and 100 back entries.
+Seen-post history and the back stack are persisted as state, not config, in
+`$XDG_STATE_HOME/smallweb/history.json` (default `~/.local/state/smallweb/history.json`). Set
+`SMALLWEB_HISTORY` to override the path. The file is written with user-only permissions on Unix
+and keeps up to 200 seen posts and 100 back entries. The old `config.history.json` file is read
+once for migration if no state history exists.
 
 ## Configuration
 

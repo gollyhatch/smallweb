@@ -66,6 +66,7 @@ pub struct App {
     rx: Receiver<Msg>,
     pub config: Config,
     pub config_path: PathBuf,
+    history_path: PathBuf,
     pub current: Option<Post>,
     pub queue: VecDeque<Post>,
     pub article: ArticleState,
@@ -107,7 +108,16 @@ impl App {
             .map(|topic| topic.trim().to_string())
             .filter(|topic| !topic.is_empty())
             .collect();
-        let stored = history::load(&config_path).unwrap_or_default();
+        let history_path = history::default_path();
+        let stored = history::load(&history_path)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                history::load(&history::legacy_path(&config_path))
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_default();
         let seen_posts = history::normalize(stored.seen, SEEN_LIMIT);
         let mut back = history::normalize_back(stored.back, HISTORY_LIMIT);
         if let Some(last) = seen_posts.last() {
@@ -130,6 +140,7 @@ impl App {
             rx,
             config,
             config_path,
+            history_path,
             current: None,
             queue: VecDeque::new(),
             article: ArticleState::Empty,
@@ -705,7 +716,7 @@ impl App {
         if self.seen_posts.is_empty() && self.history.is_empty() {
             return;
         }
-        if let Err(error) = history::save(&self.config_path, &self.seen_posts, &self.history) {
+        if let Err(error) = history::save(&self.history_path, &self.seen_posts, &self.history) {
             self.set_status(
                 StatusKind::Error,
                 format!("Could not save history: {error}"),
