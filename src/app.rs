@@ -702,7 +702,8 @@ impl App {
             .map(|search| search.query.clone())
             .unwrap_or_default();
         let count = history_matches(&self.seen_posts, &query).len();
-        let mut open = false;
+        let mut view = false;
+        let mut open_external = false;
         let mut share = false;
         let mut close = false;
 
@@ -713,7 +714,10 @@ impl App {
                 .expect("history search is open");
             match key.code {
                 KeyCode::Esc => close = true,
-                KeyCode::Enter => open = true,
+                KeyCode::Enter => view = true,
+                KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    open_external = true;
+                }
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     share = true;
                 }
@@ -751,13 +755,24 @@ impl App {
             self.history_search = None;
             return;
         }
-        if open || share {
+        if view || open_external || share {
             let Some(post) = self.selected_history_post() else {
                 self.set_status(StatusKind::Warning, "No matching post");
                 return;
             };
             self.history_search = None;
-            if open {
+            if view {
+                if self
+                    .current
+                    .as_ref()
+                    .is_some_and(|current| current.url == post.url)
+                {
+                    return;
+                }
+                self.remember_current();
+                self.show_post(post);
+                self.ensure_queue();
+            } else if open_external {
                 self.open_url(&post.url);
             } else {
                 self.share_url(&post.url);

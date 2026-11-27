@@ -70,8 +70,9 @@ post.
 
 Posts seen are remembered across sessions, so the random deck does not offer them again, and `b`
 walks back through the posts you have viewed. `H` opens a fuzzy-searchable history: type to
-filter and rank by title, domain, author, URL, or topic; select with `↑`/`↓`; `Enter` opens the
-post in the browser; `Ctrl+S` shares it with the configured share command.
+filter and rank by title, domain, author, URL, or topic, and select with `↑`/`↓`. In the history
+pane, `Enter` views the selected post inside the app, `Ctrl+O` opens it in the configured browser,
+and `Ctrl+S` runs the configured share command.
 
 Seen-post history and the back stack are persisted as state, not config, in
 `$XDG_STATE_HOME/smallweb/history.json` (default `~/.local/state/smallweb/history.json`). Set
