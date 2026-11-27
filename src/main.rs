@@ -2,6 +2,7 @@ mod api;
 mod app;
 mod article;
 mod config;
+mod history;
 mod ui;
 
 use std::env;

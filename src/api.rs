@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use reqwest::blocking::{Client, Response};
 use scraper::{Html, Selector};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const SMALLWEB_URL: &str = "https://kagi.com/smallweb/";
 const DECK_URL: &str = "https://kagi.com/smallweb/api/deck";
@@ -25,7 +25,8 @@ static CAT_DESC: LazyLock<Selector> =
 static CAT_CHIP: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a.cat-chip[href]").expect("valid selector"));
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Post {
     pub title: String,
     pub url: String,

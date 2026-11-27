@@ -19,6 +19,7 @@ use ratatui::widgets::ListState;
 use crate::api::{Api, FALLBACK_TOPICS, LikeOutcome, Post, Topic};
 use crate::article::{self, Article};
 use crate::config::{Config, save_theme, save_topics};
+use crate::history;
 
 const QUEUE_TARGET: usize = 4;
 const HISTORY_LIMIT: usize = 100;
@@ -103,6 +104,23 @@ impl App {
             .map(|topic| topic.trim().to_string())
             .filter(|topic| !topic.is_empty())
             .collect();
+        let stored = history::load(&config_path).unwrap_or_default();
+        let seen_posts = history::normalize(stored.seen, SEEN_LIMIT);
+        let mut back = history::normalize_back(stored.back, HISTORY_LIMIT);
+        if let Some(last) = seen_posts.last() {
+            if back.last().map(|post| post.url.as_str()) != Some(last.url.as_str()) {
+                back.push(last.clone());
+                if back.len() > HISTORY_LIMIT {
+                    let overflow = back.len() - HISTORY_LIMIT;
+                    back.drain(..overflow);
+                }
+            }
+        }
+        let seen: HashSet<String> = seen_posts
+            .iter()
+            .chain(back.iter())
+            .map(|post| post.url.clone())
+            .collect();
         let mut app = Self {
             api,
             tx,
@@ -126,9 +144,9 @@ impl App {
             article_height: 10,
             liked: HashSet::new(),
             liking: HashSet::new(),
-            history: Vec::new(),
-            seen_posts: Vec::new(),
-            seen: HashSet::new(),
+            history: back,
+            seen_posts,
+            seen,
             history_search: None,
             clipboard: None,
             quit: false,
@@ -661,6 +679,19 @@ impl App {
         self.article = ArticleState::Loading;
         self.reset_article_view();
         self.spawn_article(url, title);
+        self.persist_history();
+    }
+
+    fn persist_history(&mut self) {
+        if self.seen_posts.is_empty() && self.history.is_empty() {
+            return;
+        }
+        if let Err(error) = history::save(&self.config_path, &self.seen_posts, &self.history) {
+            self.set_status(
+                StatusKind::Error,
+                format!("Could not save history: {error}"),
+            );
+        }
     }
 
     fn reset_article_view(&mut self) {
@@ -691,6 +722,7 @@ impl App {
         self.topic_rotation = 0;
         self.reset_article_view();
         self.ensure_queue();
+        self.persist_history();
     }
 
     fn ensure_queue(&mut self) {

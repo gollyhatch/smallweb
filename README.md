@@ -46,11 +46,14 @@ In the topic picker: `Space` toggles, `a` selects all, `c` clears, `Enter` appli
 selection to `config.toml`, and `Esc` cancels. Selected topics are ORed; an empty selection means
 all topics.
 
-Posts seen during the session are remembered, so the random deck does not offer them again, and
-`b` walks back through the posts you have viewed. `H` opens a fuzzy-searchable history: type to
+Posts seen are remembered across sessions, so the random deck does not offer them again, and `b`
+walks back through the posts you have viewed. `H` opens a fuzzy-searchable history: type to
 filter and rank by title, domain, author, URL, or topic; select with `↑`/`↓`; `Enter` opens the
-post in the browser; `Ctrl+S` shares it with the configured share command. History is kept for the
-current session.
+post in the browser; `Ctrl+S` shares it with the configured share command.
+
+Seen-post history and the back stack are persisted next to the config in
+`config.history.json` (for example `~/.config/smallweb/config.history.json`). The file is written
+with user-only permissions on Unix and keeps up to 200 seen posts and 100 back entries.
 
 ## Configuration
 

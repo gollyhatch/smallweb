@@ -424,7 +424,7 @@ fn render_history(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
             Span::styled(" close", muted),
         ]),
         Line::from(Span::styled(
-            "Seen posts are kept for this session.",
+            "History is saved across sessions.",
             Style::default().fg(color(theme, "text.dim")),
         )),
     ]);
