@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashSet, VecDeque};
-use std::io::Write as _;
+use std::io::{Cursor, Write as _};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -20,6 +20,9 @@ use crate::config::{Config, save_theme, save_topics};
 
 const QUEUE_TARGET: usize = 4;
 const HISTORY_LIMIT: usize = 100;
+const MAX_IMAGES: usize = 12;
+const MAX_IMAGE_WIDTH: u32 = 200;
+const MAX_IMAGE_HEIGHT: u32 = 400;
 const STATUS_TTL: Duration = Duration::from_secs(7);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,10 +213,25 @@ impl App {
                     return;
                 }
                 match result {
-                    Ok(article) => {
+                    Ok(mut article) => {
                         let fallback = article.used_fallback;
+                        for (index, image) in article.images.iter_mut().enumerate() {
+                            if index >= MAX_IMAGES && image.error.is_none() {
+                                image.error = Some("image limit reached".to_string());
+                            }
+                        }
+                        let jobs: Vec<(usize, String)> = article
+                            .images
+                            .iter()
+                            .enumerate()
+                            .take(MAX_IMAGES)
+                            .filter(|(_, image)| !image.url.is_empty())
+                            .map(|(index, image)| (index, image.url.clone()))
+                            .collect();
+                        let referer = article.url.clone();
                         self.article = ArticleState::Ready(article);
                         self.reset_article_view();
+                        self.spawn_images(url.clone(), referer, jobs);
                         if fallback {
                             self.set_status(
                                 StatusKind::Warning,
@@ -233,6 +251,31 @@ impl App {
                             StatusKind::Error,
                             format!("Could not extract article: {error}"),
                         );
+                    }
+                }
+            }
+            Msg::Image {
+                article_url,
+                index,
+                result,
+            } => {
+                if !self
+                    .current
+                    .as_ref()
+                    .is_some_and(|post| post.url == article_url)
+                {
+                    return;
+                }
+                if let ArticleState::Ready(article) = &mut self.article {
+                    if let Some(image) = article.images.get_mut(index) {
+                        match result {
+                            Ok(data) => {
+                                image.data = Some(data);
+                                image.error = None;
+                            }
+                            Err(error) => image.error = Some(error),
+                        }
+                        self.lines_width = 0;
                     }
                 }
             }
@@ -557,6 +600,32 @@ impl App {
         });
     }
 
+    fn spawn_images(&self, article_url: String, referer: String, jobs: Vec<(usize, String)>) {
+        if jobs.is_empty() {
+            return;
+        }
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            for (index, url) in jobs {
+                let result = api
+                    .fetch_image(&url, &referer)
+                    .and_then(decode_image)
+                    .map_err(format_error);
+                if tx
+                    .send(Msg::Image {
+                        article_url: article_url.clone(),
+                        index,
+                        result,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+
     fn spawn_topics(&self) {
         let api = self.api.clone();
         let tx = self.tx.clone();
@@ -715,11 +784,32 @@ enum Msg {
         url: String,
         result: Result<LikeOutcome, String>,
     },
+    Image {
+        article_url: String,
+        index: usize,
+        result: Result<Arc<image::RgbaImage>, String>,
+    },
     Topics(Result<Vec<Topic>, String>),
 }
 
 fn format_error(error: anyhow::Error) -> String {
     format!("{error:#}")
+}
+
+fn decode_image(bytes: Vec<u8>) -> Result<Arc<image::RgbaImage>> {
+    let mut reader = image::ImageReader::new(Cursor::new(&bytes))
+        .with_guessed_format()
+        .context("detecting image format")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode().context("decoding image")?;
+    let thumbnail = decoded
+        .thumbnail(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT)
+        .to_rgba8();
+    Ok(Arc::new(thumbnail))
 }
 
 fn fallback_topics() -> Vec<Topic> {
@@ -841,7 +931,20 @@ fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+
+    #[test]
+    fn decodes_and_limits_image_size() {
+        let source = image::RgbaImage::from_pixel(400, 200, image::Rgba([1, 2, 3, 255]));
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(source)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let decoded = decode_image(encoded.into_inner()).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (200, 100));
+    }
 
     #[test]
     fn shell_quotes_single_quotes() {

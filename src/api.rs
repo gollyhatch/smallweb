@@ -12,6 +12,7 @@ const SMALLWEB_URL: &str = "https://kagi.com/smallweb/";
 const DECK_URL: &str = "https://kagi.com/smallweb/api/deck";
 const LIKE_URL: &str = "https://kagi.com/smallweb/api/like";
 const MAX_HTML_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 const USER_AGENT: &str = "smallweb-tui/0.1 (terminal reader)";
 
 static CAT_ROW: LazyLock<Selector> =
@@ -177,11 +178,49 @@ impl Api {
         {
             bail!("{final_url} is not an HTML article ({media_type})");
         }
-        let bytes = read_limited(response)?;
+        let bytes = read_limited(response, MAX_HTML_BYTES, "page")?;
         if bytes.is_empty() {
             bail!("{final_url} returned an empty page");
         }
         Ok(decode_html(&bytes, &content_type))
+    }
+
+    pub fn fetch_image(&self, url: &str, referer: &str) -> Result<Vec<u8>> {
+        let response = self
+            .client
+            .get(url)
+            .header(
+                "Accept",
+                "image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8,*/*;q=0.2",
+            )
+            .header("Referer", referer)
+            .send()
+            .with_context(|| format!("requesting image {url}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("HTTP {status} from {url}");
+        }
+        let media_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if !media_type.is_empty()
+            && !media_type.starts_with("image/")
+            && media_type != "application/octet-stream"
+        {
+            bail!("{url} is not an image ({media_type})");
+        }
+        let bytes = read_limited(response, MAX_IMAGE_BYTES, "image")?;
+        if bytes.is_empty() {
+            bail!("{url} returned an empty image");
+        }
+        Ok(bytes)
     }
 }
 
@@ -250,14 +289,14 @@ fn clean_topic_name(raw: &str) -> String {
     raw
 }
 
-fn read_limited(response: Response) -> Result<Vec<u8>> {
-    let mut limited = response.take(MAX_HTML_BYTES + 1);
+fn read_limited(response: Response, limit: u64, label: &str) -> Result<Vec<u8>> {
+    let mut limited = response.take(limit + 1);
     let mut bytes = Vec::new();
     limited
         .read_to_end(&mut bytes)
         .context("reading the response body")?;
-    if bytes.len() as u64 > MAX_HTML_BYTES {
-        bail!("page is larger than {} MiB", MAX_HTML_BYTES / 1024 / 1024);
+    if bytes.len() as u64 > limit {
+        bail!("{label} is larger than {} MiB", limit / 1024 / 1024);
     }
     Ok(bytes)
 }

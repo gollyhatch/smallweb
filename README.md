@@ -80,5 +80,8 @@ Run `smallweb --list-themes` to list the built-in opaline theme ids.
   Likes are real reactions sent to Kagi.
 - Article extraction uses `dom_smoothie`, a Rust port of Mozilla Readability. Pages whose content
   is mostly JavaScript may produce little readable text; press `o` to read those in the browser.
+- Article images are fetched in the background and rendered inline with truecolor half blocks.
+  Up to 12 images per article are loaded. Failed, oversized, or unsupported images (including SVG)
+  fall back to their alt text.
 - Only the Small Web blogs deck is used. Videos, code, comics, search, and river views are not
   implemented.

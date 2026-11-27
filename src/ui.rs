@@ -13,9 +13,10 @@ use ratatui::widgets::{
 use textwrap::Options;
 
 use crate::app::{App, ArticleState, StatusKind, View};
-use crate::article::{Article, BlockKind};
+use crate::article::{Article, ArticleImage, BlockKind};
 
 const MAX_TEXT_WIDTH: u16 = 100;
+const MAX_IMAGE_ROWS: u32 = 28;
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn render(app: &mut App, frame: &mut Frame<'_>) {
@@ -548,6 +549,13 @@ fn build_article_lines(article: &Article, width: usize, theme: &Theme) -> Vec<Li
                 let style = if block.quote { quote } else { caption };
                 wrap_lines(&mut sink, &block.text, width, "  ", "  ", style);
             }
+            BlockKind::Image(index) => {
+                if let Some(image) = article.images.get(index) {
+                    render_article_image(&mut sink, image, width, theme);
+                } else if !block.text.is_empty() {
+                    wrap_lines(&mut sink, &block.text, width, "  ", "  ", caption);
+                }
+            }
             BlockKind::Rule => unreachable!("rules are handled above"),
         }
         previous = Some(block.kind);
@@ -556,6 +564,90 @@ fn build_article_lines(article: &Article, width: usize, theme: &Theme) -> Vec<Li
         sink.lines.pop();
     }
     sink.lines
+}
+
+fn render_article_image(sink: &mut LineSink, image: &ArticleImage, width: usize, theme: &Theme) {
+    let caption = Style::default()
+        .fg(color(theme, "text.muted"))
+        .add_modifier(Modifier::ITALIC);
+    let Some(data) = image.data.as_deref() else {
+        let alt = if image.alt.is_empty() {
+            "image"
+        } else {
+            image.alt.as_str()
+        };
+        let (message, style) = match image.error.as_deref() {
+            Some(error) => (
+                format!("[image: {alt} — {error}]"),
+                Style::default().fg(color(theme, "warning")),
+            ),
+            None => (format!("[image: {alt} — loading…]"), caption),
+        };
+        wrap_lines(sink, &message, width, "", "", style);
+        return;
+    };
+
+    if data.width() <= 2 || data.height() <= 2 {
+        return;
+    }
+
+    let max_width = width.max(1) as u32;
+    let mut target_w = max_width.min(data.width().max(1));
+    let aspect = data.height() as f64 / data.width().max(1) as f64;
+    let mut target_h = (target_w as f64 * aspect).round().max(1.0) as u32;
+    let max_h = MAX_IMAGE_ROWS * 2;
+    if target_h > max_h {
+        let scale = max_h as f64 / target_h as f64;
+        target_w = ((target_w as f64 * scale).round() as u32).max(1);
+        target_h = max_h;
+    }
+    target_h += target_h % 2;
+
+    let resized = image::imageops::resize(
+        data,
+        target_w,
+        target_h,
+        image::imageops::FilterType::Triangle,
+    );
+    let background = color(theme, "bg.base");
+    let left_pad = width.saturating_sub(target_w as usize) / 2;
+    let padding = " ".repeat(left_pad);
+    for y in (0..target_h).step_by(2) {
+        let mut spans = Vec::with_capacity(target_w as usize + 1);
+        if left_pad > 0 {
+            spans.push(Span::raw(padding.clone()));
+        }
+        for x in 0..target_w {
+            let upper = resized.get_pixel(x, y);
+            let lower = resized.get_pixel(x, y + 1);
+            spans.push(Span::styled(
+                "▀",
+                Style::default()
+                    .fg(blend_pixel(upper, background))
+                    .bg(blend_pixel(lower, background)),
+            ));
+        }
+        sink.push(Line::from(spans));
+    }
+}
+
+fn blend_pixel(pixel: &image::Rgba<u8>, background: Color) -> Color {
+    let [red, green, blue, alpha] = pixel.0;
+    let (bg_red, bg_green, bg_blue) = match background {
+        Color::Rgb(red, green, blue) => (red, green, blue),
+        _ => (0, 0, 0),
+    };
+    if alpha == 255 {
+        return Color::Rgb(red, green, blue);
+    }
+    let blend = |foreground: u8, background: u8| {
+        ((foreground as u32 * alpha as u32 + background as u32 * (255 - alpha) as u32) / 255) as u8
+    };
+    Color::Rgb(
+        blend(red, bg_red),
+        blend(green, bg_green),
+        blend(blue, bg_blue),
+    )
 }
 
 fn needs_gap(previous: Option<BlockKind>, current: BlockKind) -> bool {
@@ -676,10 +768,7 @@ mod tests {
     fn article() -> Article {
         Article {
             title: "Test".to_string(),
-            byline: None,
-            site_name: None,
             published: None,
-            excerpt: None,
             url: "https://example.com".to_string(),
             blocks: vec![
                 Block {
@@ -714,6 +803,7 @@ mod tests {
                     quote: false,
                 },
             ],
+            images: Vec::new(),
             used_fallback: false,
         }
     }
@@ -751,6 +841,59 @@ mod tests {
                 .sum::<usize>()
                 <= 32
         }));
+    }
+
+    #[test]
+    fn renders_images_as_half_blocks() {
+        let image = ArticleImage {
+            url: "https://example.com/image.png".to_string(),
+            alt: "Test image".to_string(),
+            data: Some(Arc::new(image::RgbaImage::from_pixel(
+                4,
+                4,
+                image::Rgba([255, 0, 0, 255]),
+            ))),
+            error: None,
+        };
+        let mut article = article();
+        article.blocks = vec![Block {
+            kind: BlockKind::Image(0),
+            text: "Test image".to_string(),
+            quote: false,
+        }];
+        article.images = vec![image];
+
+        let lines = build_article_lines(&article, 20, &Theme::default());
+        assert!(lines.iter().any(|line| line.to_string().contains('▀')));
+        let red = Color::Rgb(255, 0, 0);
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| { span.style.fg == Some(red) && span.style.bg == Some(red) })
+        );
+    }
+
+    #[test]
+    fn renders_image_placeholders() {
+        let mut article = article();
+        article.blocks = vec![Block {
+            kind: BlockKind::Image(0),
+            text: "Missing".to_string(),
+            quote: false,
+        }];
+        article.images = vec![ArticleImage {
+            url: String::new(),
+            alt: "Missing".to_string(),
+            data: None,
+            error: Some("HTTP 404".to_string()),
+        }];
+        let lines = build_article_lines(&article, 40, &Theme::default());
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains("HTTP 404"))
+        );
     }
 
     #[test]
