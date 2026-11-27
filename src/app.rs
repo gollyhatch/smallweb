@@ -294,20 +294,40 @@ impl App {
                     }
                 }
             }
-            Msg::Like { url, result } => {
+            Msg::Like {
+                url,
+                action,
+                result,
+            } => {
                 self.liking.remove(&url);
                 match result {
                     Ok(outcome) => {
-                        self.liked.insert(url);
+                        let label = match action {
+                            LikeAction::Like => {
+                                self.liked.insert(url);
+                                "♥ liked"
+                            }
+                            LikeAction::Unlike => {
+                                self.liked.remove(&url);
+                                "♡ unliked"
+                            }
+                        };
                         let message = if outcome.likes_total > 0 {
-                            format!("♥ liked · {} total", outcome.likes_total)
+                            format!("{label} · {} total", outcome.likes_total)
                         } else {
-                            "♥ liked".to_string()
+                            label.to_string()
                         };
                         self.set_status(StatusKind::Success, message);
                     }
                     Err(error) => {
-                        self.set_status(StatusKind::Error, format!("Could not like post: {error}"));
+                        let action = match action {
+                            LikeAction::Like => "like",
+                            LikeAction::Unlike => "unlike",
+                        };
+                        self.set_status(
+                            StatusKind::Error,
+                            format!("Could not {action} post: {error}"),
+                        );
                     }
                 }
             }
@@ -457,7 +477,7 @@ impl App {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('n') | KeyCode::Right | KeyCode::Char(']') => self.next_post(),
             KeyCode::Char('b') | KeyCode::Left => self.previous_post(),
-            KeyCode::Char('l') => self.like_current(),
+            KeyCode::Char('l') => self.toggle_like_current(),
             KeyCode::Char('y') => self.copy_current_url(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
             KeyCode::Char('S') => self.share_current(),
@@ -754,30 +774,42 @@ impl App {
         });
     }
 
-    fn like_current(&mut self) {
+    fn toggle_like_current(&mut self) {
         let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
-            self.set_status(StatusKind::Warning, "No post to like");
+            self.set_status(StatusKind::Warning, "No post to react to");
             return;
         };
-        if self.liked.contains(&url) {
-            self.set_status(StatusKind::Info, "You already liked this post");
-            return;
-        }
         if !self.liking.insert(url.clone()) {
-            self.set_status(StatusKind::Info, "Like already in flight");
+            self.set_status(StatusKind::Info, "Reaction already in flight");
             return;
         }
+        let action = if self.liked.contains(&url) {
+            LikeAction::Unlike
+        } else {
+            LikeAction::Like
+        };
         let api = self.api.clone();
         let tx = self.tx.clone();
-        let like_url = url.clone();
+        let reaction_url = url.clone();
         thread::spawn(move || {
-            let result = api.like(&like_url).map_err(format_error);
+            let result = match action {
+                LikeAction::Like => api.like(&reaction_url),
+                LikeAction::Unlike => api.unlike(&reaction_url),
+            }
+            .map_err(format_error);
             let _ = tx.send(Msg::Like {
-                url: like_url,
+                url: reaction_url,
+                action,
                 result,
             });
         });
-        self.set_status(StatusKind::Info, "Liking…");
+        self.set_status(
+            StatusKind::Info,
+            match action {
+                LikeAction::Like => "Liking…",
+                LikeAction::Unlike => "Unliking…",
+            },
+        );
     }
 
     fn copy_current_url(&mut self) {
@@ -992,6 +1024,12 @@ fn move_selection(list: &mut ListState, delta: i32, count: usize) {
     list.select(Some(next));
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LikeAction {
+    Like,
+    Unlike,
+}
+
 #[derive(Debug)]
 enum Msg {
     Deck {
@@ -1005,6 +1043,7 @@ enum Msg {
     },
     Like {
         url: String,
+        action: LikeAction,
         result: Result<LikeOutcome, String>,
     },
     Image {

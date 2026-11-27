@@ -11,6 +11,7 @@ use serde::Deserialize;
 const SMALLWEB_URL: &str = "https://kagi.com/smallweb/";
 const DECK_URL: &str = "https://kagi.com/smallweb/api/deck";
 const LIKE_URL: &str = "https://kagi.com/smallweb/api/like";
+const UNLIKE_URL: &str = "https://kagi.com/smallweb/api/unlike";
 const MAX_HTML_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 const USER_AGENT: &str = "smallweb-tui/0.1 (terminal reader)";
@@ -124,20 +125,30 @@ impl Api {
     }
 
     pub fn like(&self, url: &str) -> Result<LikeOutcome> {
+        self.send_reaction(LIKE_URL, url, "like")
+    }
+
+    pub fn unlike(&self, url: &str) -> Result<LikeOutcome> {
+        self.send_reaction(UNLIKE_URL, url, "unlike")
+    }
+
+    fn send_reaction(&self, endpoint: &str, url: &str, action: &str) -> Result<LikeOutcome> {
         let response = self
             .client
-            .post(LIKE_URL)
+            .post(endpoint)
             .header("Accept", "application/json")
             .json(&serde_json::json!({ "url": url, "emoji": "👍" }))
             .send()
-            .context("sending the like")?;
+            .with_context(|| format!("sending the {action}"))?;
         let status = response.status();
         if !status.is_success() {
-            bail!("like failed with HTTP {status}");
+            bail!("{action} failed with HTTP {status}");
         }
-        let result: LikeResponse = response.json().context("decoding the like response")?;
+        let result: LikeResponse = response
+            .json()
+            .with_context(|| format!("decoding the {action} response"))?;
         if !result.ok {
-            bail!("Small Web rejected the like");
+            bail!("Small Web rejected the {action}");
         }
         Ok(LikeOutcome {
             likes_total: result.likes_total.unwrap_or_default(),

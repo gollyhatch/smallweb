@@ -548,7 +548,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
     let rows = [
         ("n / → / ]", "next random post"),
         ("b / ←", "go back to the previous post"),
-        ("l", "like the post (sent to Kagi)"),
+        ("l", "toggle like on the post (sent to Kagi)"),
         ("y", "copy the original URL"),
         ("o / enter", "open the original post in your browser"),
         ("S", "run the configured share command with the post URL"),
