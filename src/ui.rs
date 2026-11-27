@@ -101,13 +101,6 @@ fn render_header(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
             push_separator(&mut meta, muted);
             meta.push(Span::styled("♥ liked", error));
         }
-        if matches!(app.article, ArticleState::Loading) {
-            push_separator(&mut meta, muted);
-            meta.push(Span::styled(
-                format!("{} loading article…", spinner(app.tick)),
-                muted,
-            ));
-        }
     }
     frame.render_widget(Paragraph::new(Line::from(meta)), row(area, 1));
 
