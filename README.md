@@ -64,9 +64,9 @@ In the topic picker: `Space` toggles, `a` selects all, `c` clears, `Enter` appli
 selection to `config.toml`, and `Esc` cancels. Selected topics are ORed; an empty selection means
 all topics.
 
-`/` opens article search. Type a query and press `Enter`; `n` and `N` cycle forwards and backwards
-through matches, and `Esc` clears the search. While a search is active, `→`/`]` still load the next
-post.
+`/` opens article search. Type a query and press `Enter`; matching text is highlighted, the current
+match uses a stronger highlight, and `n` and `N` cycle forwards and backwards through matches.
+`Esc` clears the search. While a search is active, `→`/`]` still load the next post.
 
 Posts seen are remembered across sessions, so the random deck does not offer them again, and `b`
 walks back through the posts you have viewed. `H` opens a fuzzy-searchable history: type to

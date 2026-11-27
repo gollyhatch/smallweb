@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 use opaline::Theme;
@@ -214,6 +215,8 @@ fn render_body(app: &mut App, frame: &mut Frame<'_>, area: Rect, theme: &Arc<The
     }
 
     {
+        let search = app.article_search.as_ref();
+        let current_line = search.and_then(|search| search.matches.get(search.current).copied());
         let buffer = frame.buffer_mut();
         let start = app.scroll.min(app.article_lines.len());
         for (offset, line) in app
@@ -223,10 +226,14 @@ fn render_body(app: &mut App, frame: &mut Frame<'_>, area: Rect, theme: &Arc<The
             .take(area.height as usize)
             .enumerate()
         {
+            let index = start + offset;
+            let highlighted = search.and_then(|search| {
+                highlight_matches(line, &search.query, current_line == Some(index), theme)
+            });
             buffer.set_line(
                 text_area.x,
                 text_area.y + offset as u16,
-                line,
+                highlighted.as_ref().unwrap_or(line),
                 text_area.width,
             );
         }
@@ -910,6 +917,100 @@ fn wrap_lines(
     }
 }
 
+fn highlight_matches(
+    line: &Line<'static>,
+    query: &str,
+    current: bool,
+    theme: &Theme,
+) -> Option<Line<'static>> {
+    let ranges = match_ranges(line.to_string().as_str(), query);
+    if ranges.is_empty() {
+        return None;
+    }
+    let highlight = Style::from(theme.style(if current {
+        "active_selected"
+    } else {
+        "selected"
+    }));
+    let mut spans = Vec::with_capacity(line.spans.len() + ranges.len() * 2);
+    let mut offset = 0;
+    for span in &line.spans {
+        let content = span.content.as_ref();
+        let end = offset + content.len();
+        let mut cursor = offset;
+        for range in ranges
+            .iter()
+            .filter(|range| range.start < end && range.end > offset)
+        {
+            let start = range.start.max(offset);
+            let finish = range.end.min(end);
+            if start > cursor {
+                spans.push(Span::styled(
+                    content[cursor - offset..start - offset].to_string(),
+                    span.style,
+                ));
+            }
+            if finish > start {
+                spans.push(Span::styled(
+                    content[start - offset..finish - offset].to_string(),
+                    span.style.patch(highlight),
+                ));
+            }
+            cursor = finish;
+        }
+        if cursor < end {
+            spans.push(Span::styled(
+                content[cursor - offset..].to_string(),
+                span.style,
+            ));
+        }
+        offset = end;
+    }
+    Some(Line::from(spans).style(line.style))
+}
+
+fn match_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let query: Vec<char> = query.trim().chars().flat_map(char::to_lowercase).collect();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut lowered = Vec::new();
+    let mut owners = Vec::new();
+    for (index, character) in text.chars().enumerate() {
+        for lower in character.to_lowercase() {
+            lowered.push(lower);
+            owners.push(index);
+        }
+    }
+    if lowered.len() < query.len() {
+        return Vec::new();
+    }
+    let offsets: Vec<usize> = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    for start in 0..=lowered.len() - query.len() {
+        if lowered[start..start + query.len()] != query[..] {
+            continue;
+        }
+        let first = owners[start];
+        let last = owners[start + query.len() - 1];
+        let range = offsets[first]..offsets[last + 1];
+        if range.is_empty() {
+            continue;
+        }
+        match ranges.last_mut() {
+            Some(previous) if range.start <= previous.end => {
+                previous.end = previous.end.max(range.end);
+            }
+            _ => ranges.push(range),
+        }
+    }
+    ranges
+}
+
 fn row(area: Rect, index: u16) -> Rect {
     Rect::new(
         area.x,
@@ -1142,6 +1243,54 @@ mod tests {
                 .iter()
                 .any(|line| line.to_string().contains("[image: Test image]"))
         );
+    }
+
+    #[test]
+    fn highlights_all_search_matches_across_spans() {
+        let theme = Theme::default();
+        let line = Line::from(vec![
+            Span::styled("Ru", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("st and RUST", Style::default()),
+        ]);
+        let highlighted = highlight_matches(&line, "rust", false, &theme).expect("matches");
+        assert_eq!(highlighted.to_string(), "Rust and RUST");
+
+        let background = Some(color(&theme, "bg.highlight"));
+        let matches: Vec<&str> = highlighted
+            .spans
+            .iter()
+            .filter(|span| span.style.bg == background)
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(matches, ["Ru", "st", "RUST"]);
+        assert!(
+            highlighted.spans.iter().any(
+                |span| span.content == "Ru" && span.style.add_modifier.contains(Modifier::BOLD)
+            )
+        );
+    }
+
+    #[test]
+    fn highlights_the_current_search_match_differently() {
+        let theme = Theme::default();
+        let line = Line::from("rust and rust");
+        let normal = highlight_matches(&line, "rust", false, &theme).expect("matches");
+        let current = highlight_matches(&line, "rust", true, &theme).expect("matches");
+
+        assert_eq!(
+            normal.spans[0].style.bg,
+            Some(color(&theme, "bg.highlight"))
+        );
+        assert_eq!(current.spans[0].style.bg, Some(color(&theme, "bg.active")));
+        assert!(current.spans[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn skips_highlighting_when_nothing_matches() {
+        let theme = Theme::default();
+        let line = Line::from("Hello world");
+        assert!(highlight_matches(&line, "", false, &theme).is_none());
+        assert!(highlight_matches(&line, "missing", false, &theme).is_none());
     }
 
     #[test]
