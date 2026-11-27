@@ -37,7 +37,7 @@ pub fn render(app: &mut App, frame: &mut Frame<'_>) {
         Constraint::Length(4),
         Constraint::Length(1),
         Constraint::Min(3),
-        Constraint::Length(2),
+        Constraint::Length(1),
     ])
     .split(area);
 
@@ -334,19 +334,14 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         Span::styled("q", key),
         Span::styled(" quit", label),
     ]);
-    frame.render_widget(Paragraph::new(help), row(area, 0));
-
-    if let Some(input) = &app.search_input {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("/{input}▏"),
-                    Style::default().fg(color(theme, "accent.primary")),
-                ),
-                Span::styled("  enter search · esc cancel", muted_style(theme)),
-            ])),
-            row(area, 1),
-        );
+    let line = if let Some(input) = &app.search_input {
+        Line::from(vec![
+            Span::styled(
+                format!("/{input}▏"),
+                Style::default().fg(color(theme, "accent.primary")),
+            ),
+            Span::styled("  enter search · esc cancel", muted_style(theme)),
+        ])
     } else if let Some(search) = &app.article_search {
         let count = search.matches.len();
         let (message, style) = if count == 0 {
@@ -368,10 +363,7 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
                 Style::default().fg(color(theme, "accent.secondary")),
             )
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(message, style))),
-            row(area, 1),
-        );
+        Line::from(Span::styled(message, style))
     } else if let Some(status) = &app.status {
         let (prefix, token) = match status.kind {
             StatusKind::Info => ("· ", "info"),
@@ -379,14 +371,14 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
             StatusKind::Warning => ("! ", "warning"),
             StatusKind::Error => ("✗ ", "error"),
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("{prefix}{}", status.message),
-                Style::default().fg(color(theme, token)),
-            ))),
-            row(area, 1),
-        );
-    }
+        Line::from(Span::styled(
+            format!("{prefix}{}", status.message),
+            Style::default().fg(color(theme, token)),
+        ))
+    } else {
+        help
+    };
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_history(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
