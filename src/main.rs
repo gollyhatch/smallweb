@@ -70,20 +70,17 @@ fn run() -> Result<()> {
 
 fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
+        // Draw once per iteration so input is rendered before the next poll
+        // timeout, instead of waiting up to 100 ms after every key press.
         terminal
             .draw(|frame| ui::render(app, frame))
             .context("drawing the terminal UI")?;
 
-        while event::poll(Duration::from_millis(100)).context("polling terminal events")? {
+        if event::poll(Duration::from_millis(100)).context("polling terminal events")? {
             match event::read().context("reading terminal events")? {
                 Event::Key(key) => app.handle_key(key),
                 Event::Resize(_, _) => {}
                 _ => {}
-            }
-            app.poll_messages();
-            app.tick();
-            if app.quit {
-                return Ok(());
             }
         }
 
