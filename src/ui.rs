@@ -308,7 +308,7 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         )
     } else {
         (
-            "j/k scroll · space page · g/G top/bottom · r reload".to_string(),
+            "j/k scroll · d/u half page · space page · g/G top/bottom · r reload".to_string(),
             Style::default().fg(color(theme, "text.dim")),
         )
     };
@@ -441,6 +441,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("t", "choose topics"),
         ("T", "choose a theme (live preview)"),
         ("j / k", "scroll one line"),
+        ("d / u", "scroll half a page down / up"),
         ("space / pgdn", "page down"),
         ("pgup", "page up"),
         ("g / G", "jump to top / bottom"),

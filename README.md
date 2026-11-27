@@ -30,6 +30,7 @@ cargo install --path .
 | `t` | Select topics to filter random posts |
 | `T` | Theme picker with live preview |
 | `j`/`k`, `↑`/`↓` | Scroll one line |
+| `d`/`u` | Scroll half a page down / up |
 | `Space`, `PgDn` | Page down |
 | `PgUp` | Page up |
 | `g`, `G` | Top / bottom |

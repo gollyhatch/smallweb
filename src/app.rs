@@ -382,6 +382,8 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_page(1),
             KeyCode::PageUp => self.scroll_page(-1),
+            KeyCode::Char('d') => self.scroll_half_page(1),
+            KeyCode::Char('u') => self.scroll_half_page(-1),
             KeyCode::Char('g') | KeyCode::Home => self.scroll_to_top(),
             KeyCode::Char('G') | KeyCode::End => self.scroll_to_bottom(),
             _ => {}
@@ -586,6 +588,11 @@ impl App {
 
     pub fn scroll_page(&mut self, direction: i32) {
         let step = self.article_height.saturating_sub(2).max(1) as isize;
+        self.scroll_by(step * direction as isize);
+    }
+
+    pub fn scroll_half_page(&mut self, direction: i32) {
+        let step = (self.article_height / 2).max(1) as isize;
         self.scroll_by(step * direction as isize);
     }
 
