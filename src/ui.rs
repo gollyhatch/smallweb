@@ -295,14 +295,14 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         Span::styled(" open ", label),
         Span::styled("S", key),
         Span::styled(" share ", label),
+        Span::styled("/", key),
+        Span::styled(" search ", label),
         Span::styled("i", key),
         Span::styled(" img ", label),
         Span::styled("H", key),
         Span::styled(" hist ", label),
         Span::styled("t", key),
         Span::styled(" topics ", label),
-        Span::styled("T", key),
-        Span::styled(" theme ", label),
         Span::styled("?", key),
         Span::styled(" help ", label),
         Span::styled("q", key),
@@ -310,7 +310,43 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     ]);
     frame.render_widget(Paragraph::new(help), row(area, 0));
 
-    if let Some(status) = &app.status {
+    if let Some(input) = &app.search_input {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!("/{input}▏"),
+                    Style::default().fg(color(theme, "accent.primary")),
+                ),
+                Span::styled("  enter search · esc cancel", muted_style(theme)),
+            ])),
+            row(area, 1),
+        );
+    } else if let Some(search) = &app.article_search {
+        let count = search.matches.len();
+        let (message, style) = if count == 0 {
+            (
+                format!(
+                    "search \"{}\" · no matches · / edit · esc clear",
+                    search.query
+                ),
+                Style::default().fg(color(theme, "warning")),
+            )
+        } else {
+            (
+                format!(
+                    "search \"{}\" · {}/{} · n next · N previous · esc clear",
+                    search.query,
+                    search.current + 1,
+                    count
+                ),
+                Style::default().fg(color(theme, "accent.secondary")),
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(message, style))),
+            row(area, 1),
+        );
+    } else if let Some(status) = &app.status {
         let (prefix, token) = match status.kind {
             StatusKind::Info => ("· ", "info"),
             StatusKind::Success => ("✓ ", "success"),
@@ -553,6 +589,8 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
     let rows = [
         ("n / → / ]", "next random post"),
         ("b / ←", "go back to the previous post"),
+        ("/", "search the article text"),
+        ("n / N", "next / previous search match (while searching)"),
         ("l", "toggle like on the post (sent to Kagi)"),
         ("F", "flag the post as inappropriate (sent to Kagi)"),
         ("y", "copy the original URL"),
@@ -608,6 +646,7 @@ fn ensure_article_lines(app: &mut App, width: u16, theme: &Arc<Theme>) {
     };
     app.lines_width = width;
     app.lines_theme = Some(theme.clone());
+    app.refresh_article_search();
 }
 
 fn build_article_lines(

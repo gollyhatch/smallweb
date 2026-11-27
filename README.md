@@ -23,6 +23,8 @@ cargo install --path .
 | Key | Action |
 | --- | --- |
 | `n`, `→`, `]` | Next random post |
+| `/` | Search the article text |
+| `N` | Previous article search match (while searching) |
 | `b`, `←` | Go back to the previous post |
 | `l` | Toggle like on the current post (sent to Kagi) |
 | `F` | Flag the current post as inappropriate (sent to Kagi) |
@@ -47,6 +49,10 @@ cargo install --path .
 In the topic picker: `Space` toggles, `a` selects all, `c` clears, `Enter` applies and saves the
 selection to `config.toml`, and `Esc` cancels. Selected topics are ORed; an empty selection means
 all topics.
+
+`/` opens article search. Type a query and press `Enter`; `n` and `N` cycle forwards and backwards
+through matches, and `Esc` clears the search. While a search is active, `→`/`]` still load the next
+post.
 
 Posts seen are remembered across sessions, so the random deck does not offer them again, and `b`
 walks back through the posts you have viewed. `H` opens a fuzzy-searchable history: type to

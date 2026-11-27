@@ -91,6 +91,8 @@ pub struct App {
     pub seen_posts: Vec<Post>,
     seen: HashSet<String>,
     pub history_search: Option<HistorySearch>,
+    pub search_input: Option<String>,
+    pub article_search: Option<ArticleSearch>,
     clipboard: Option<ClipboardContext>,
     pub quit: bool,
     pub tick: u64,
@@ -165,6 +167,8 @@ impl App {
             seen_posts,
             seen,
             history_search: None,
+            search_input: None,
+            article_search: None,
             clipboard: None,
             quit: false,
             tick: 0,
@@ -415,6 +419,11 @@ impl App {
             return;
         }
 
+        if self.search_input.is_some() {
+            self.handle_search_input(key);
+            return;
+        }
+
         match self.view {
             View::Help => {
                 if matches!(
@@ -522,8 +531,14 @@ impl App {
     fn handle_reader_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('n') if self.article_search.is_some() => self.next_match(),
+            KeyCode::Char('N') if self.article_search.is_some() => self.previous_match(),
             KeyCode::Char('n') | KeyCode::Right | KeyCode::Char(']') => self.next_post(),
             KeyCode::Char('b') | KeyCode::Left => self.previous_post(),
+            KeyCode::Char('/') => self.start_article_search(),
+            KeyCode::Esc if self.article_search.is_some() => {
+                self.article_search = None;
+            }
             KeyCode::Char('l') => self.toggle_like_current(),
             KeyCode::Char('F') => self.flag_current(),
             KeyCode::Char('y') => self.copy_current_url(),
@@ -547,6 +562,111 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => self.scroll_to_bottom(),
             _ => {}
         }
+    }
+
+    fn start_article_search(&mut self) {
+        self.search_input = Some(
+            self.article_search
+                .as_ref()
+                .map(|search| search.query.clone())
+                .unwrap_or_default(),
+        );
+    }
+
+    fn handle_search_input(&mut self, key: KeyEvent) {
+        let Some(mut input) = self.search_input.take() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => return,
+            KeyCode::Enter => {
+                let query = input.trim().to_string();
+                if query.is_empty() {
+                    self.article_search = None;
+                    return;
+                }
+                let matches = self.article_matches(&query);
+                let first = matches.first().copied();
+                self.article_search = Some(ArticleSearch {
+                    query,
+                    matches,
+                    current: 0,
+                });
+                if let Some(line) = first {
+                    self.reveal_line(line);
+                } else {
+                    self.set_status(StatusKind::Warning, "No matches in article");
+                }
+                return;
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.clear();
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                input.push(character);
+            }
+            _ => {}
+        }
+        self.search_input = Some(input);
+    }
+
+    fn article_matches(&self, query: &str) -> Vec<usize> {
+        find_matches(&self.article_lines, query)
+    }
+
+    pub fn refresh_article_search(&mut self) {
+        let Some(query) = self
+            .article_search
+            .as_ref()
+            .map(|search| search.query.clone())
+        else {
+            return;
+        };
+        let matches = self.article_matches(&query);
+        if let Some(search) = self.article_search.as_mut() {
+            search.current = search.current.min(matches.len().saturating_sub(1));
+            search.matches = matches;
+        }
+    }
+
+    fn next_match(&mut self) {
+        self.cycle_match(true);
+    }
+
+    fn previous_match(&mut self) {
+        self.cycle_match(false);
+    }
+
+    fn cycle_match(&mut self, forward: bool) {
+        let Some(search) = self.article_search.as_mut() else {
+            return;
+        };
+        let count = search.matches.len();
+        if count == 0 {
+            let query = search.query.clone();
+            self.set_status(StatusKind::Warning, format!("No matches for \"{query}\""));
+            return;
+        }
+        search.current = if forward {
+            (search.current + 1) % count
+        } else {
+            (search.current + count - 1) % count
+        };
+        let line = search.matches[search.current];
+        self.reveal_line(line);
+    }
+
+    fn reveal_line(&mut self, line: usize) {
+        let height = self.article_height.max(1);
+        let top = line.saturating_sub(height / 2);
+        self.scroll = top.min(self.max_scroll());
     }
 
     fn open_history(&mut self) {
@@ -697,6 +817,8 @@ impl App {
     fn show_post(&mut self, post: Post) {
         let url = post.url.clone();
         let title = post.title.clone();
+        self.article_search = None;
+        self.search_input = None;
         self.seen.insert(url.clone());
         self.seen_posts.retain(|seen| seen.url != url);
         self.seen_posts.push(post.clone());
@@ -733,6 +855,8 @@ impl App {
     }
 
     fn reload(&mut self) {
+        self.article_search = None;
+        self.search_input = None;
         if let Some(post) = self.current.clone() {
             self.article = ArticleState::Loading;
             self.reset_article_view();
@@ -750,6 +874,8 @@ impl App {
         self.queue.clear();
         self.current = None;
         self.article = ArticleState::Empty;
+        self.article_search = None;
+        self.search_input = None;
         self.topic_rotation = 0;
         self.reset_article_view();
         self.ensure_queue();
@@ -1078,6 +1204,29 @@ impl App {
     }
 }
 
+pub struct ArticleSearch {
+    pub query: String,
+    pub matches: Vec<usize>,
+    pub current: usize,
+}
+
+fn find_matches(lines: &[Line<'_>], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            line.to_string()
+                .to_lowercase()
+                .contains(&query)
+                .then_some(index)
+        })
+        .collect()
+}
+
 pub struct HistorySearch {
     pub query: String,
     pub list: ListState,
@@ -1357,6 +1506,19 @@ mod tests {
         let results = history_matches(&posts, "");
         assert_eq!(results[0].title, "new");
         assert_eq!(results[1].title, "old");
+    }
+
+    #[test]
+    fn finds_article_search_matches_case_insensitively() {
+        let lines = vec![
+            Line::from("Rust and more Rust"),
+            Line::from("nothing here"),
+            Line::from("another rust line"),
+        ];
+        assert_eq!(find_matches(&lines, "rust"), [0, 2]);
+        assert_eq!(find_matches(&lines, "RUST"), [0, 2]);
+        assert!(find_matches(&lines, "  ").is_empty());
+        assert!(find_matches(&lines, "missing").is_empty());
     }
 
     #[test]
