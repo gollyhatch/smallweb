@@ -13,6 +13,9 @@ pub struct Config {
     /// Command used to open the original post. The URL is appended unless the
     /// command contains `{}` or `%s` as a placeholder.
     pub browser: Option<String>,
+    /// Command used to share the original post. The URL is appended unless the
+    /// command contains `{}` or `%s` as a placeholder. Optional.
+    pub share: Option<String>,
     /// Topic slugs selected at startup. Empty means "all topics".
     pub topics: Vec<String>,
 }
@@ -79,6 +82,14 @@ impl Config {
         }
         default_browser().to_string()
     }
+
+    pub fn share_command(&self) -> Option<String> {
+        self.share
+            .as_deref()
+            .map(str::trim)
+            .filter(|share| !share.is_empty())
+            .map(str::to_string)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -106,11 +117,14 @@ mod tests {
             r#"
 theme = "nord"
 browser = "firefox --new-tab"
+share = "toot post"
 topics = ["programming", "science"]
 "#,
         )
         .unwrap();
         assert_eq!(config.theme.as_deref(), Some("nord"));
+        assert_eq!(config.share.as_deref(), Some("toot post"));
+        assert_eq!(config.share_command().as_deref(), Some("toot post"));
         assert_eq!(config.topics, ["programming", "science"]);
     }
 }

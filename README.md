@@ -26,6 +26,7 @@ cargo install --path .
 | `l` | Like the current post (sent to Kagi) |
 | `y` | Copy the original URL |
 | `o`, `Enter` | Open the original post in the configured browser |
+| `S` | Run the configured share command with the post URL |
 | `t` | Select topics to filter random posts |
 | `T` | Theme picker with live preview |
 | `j`/`k`, `↑`/`↓` | Scroll one line |
@@ -51,13 +52,18 @@ theme = "catppuccin-mocha"
 # The URL is appended to this command. Use {} or %s as an explicit placeholder.
 browser = "firefox --new-tab"
 
+# Optional share command. Receives the post URL as its argument.
+share = "toot post"
+
 # Optional initial topic filter. Empty or omitted means all topics.
 topics = ["programming", "science"]
 ```
 
 `browser` falls back to `$BROWSER`, then `xdg-open` (Linux), `open` (macOS), or
-`cmd /C start ""` (Windows). The theme picker (`T`) changes the theme for the current session;
-set `theme` in the config to keep it across launches.
+`cmd /C start ""` (Windows). `share` has no default; pressing `S` without it shows a warning.
+Both commands receive the post URL as their final argument, unless they contain `{}` or `%s`.
+The theme picker (`T`) changes the theme for the current session; set `theme` in the config to keep
+it across launches.
 
 Run `smallweb --list-themes` to list the built-in opaline theme ids.
 

@@ -39,6 +39,9 @@ fn run() -> Result<()> {
     if let Some(browser) = options.browser {
         config.browser = Some(browser);
     }
+    if let Some(share) = options.share {
+        config.share = Some(share);
+    }
     let topics = if options.topics.is_empty() {
         config.topics.clone()
     } else {
@@ -119,6 +122,7 @@ struct Options {
     config: Option<PathBuf>,
     theme: Option<String>,
     browser: Option<String>,
+    share: Option<String>,
     topics: Vec<String>,
     list_themes: bool,
     help: bool,
@@ -135,6 +139,7 @@ fn parse_args() -> Result<Options> {
                 "--config" => options.config = Some(PathBuf::from(value)),
                 "--theme" => options.theme = Some(value.to_string()),
                 "--browser" => options.browser = Some(value.to_string()),
+                "--share" => options.share = Some(value.to_string()),
                 "--topic" | "--topics" => options.topics.extend(split_topics(value)),
                 _ => bail!("unknown option '{flag}' (try --help)"),
             }
@@ -164,6 +169,13 @@ fn parse_args() -> Result<Options> {
                     .get(index)
                     .ok_or_else(|| anyhow!("--browser needs a command"))?;
                 options.browser = Some(value.clone());
+            }
+            "--share" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| anyhow!("--share needs a command"))?;
+                options.share = Some(value.clone());
             }
             "--topic" | "--topics" => {
                 index += 1;
@@ -204,6 +216,7 @@ Options:
   --config <path>   Config file (default: ~/.config/smallweb/config.toml)
   --theme <id>      Opaline theme id or path to a theme TOML
   --browser <cmd>   Browser command. The URL is appended, or use {{}} / %s.
+  --share <cmd>     Share command. The URL is appended, or use {{}} / %s.
   --topic <slug>    Start with a topic filter (repeatable, comma separated)
   --list-themes     List built-in Opaline theme ids
   -h, --help        Print this help
@@ -212,8 +225,9 @@ Options:
 Config example:
   theme = \"catppuccin-mocha\"
   browser = \"firefox --new-tab\"   # or \"xdg-open\", \"open\", ...
+  share = \"toot post\"             # optional; receives the post URL
   topics = [\"programming\", \"science\"]
 
-Keys: n next · l like · y copy URL · o open · t topics · T theme · ? help · q quit"
+Keys: n next · l like · y copy URL · o open · S share · t topics · T theme · ? help · q quit"
     );
 }

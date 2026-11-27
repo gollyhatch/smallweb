@@ -373,6 +373,7 @@ impl App {
             KeyCode::Char('l') => self.like_current(),
             KeyCode::Char('y') => self.copy_current_url(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
+            KeyCode::Char('S') => self.share_current(),
             KeyCode::Char('t') => self.open_topics(),
             KeyCode::Char('T') => self.open_themes(),
             KeyCode::Char('?') | KeyCode::F(1) => self.view = View::Help,
@@ -554,9 +555,27 @@ impl App {
             return;
         };
         let command = self.config.browser_command();
-        match open_in_browser(&command, &url) {
+        match run_command_with_url(&command, &url) {
             Ok(()) => self.set_status(StatusKind::Success, format!("Opened with {command}")),
             Err(error) => self.set_status(StatusKind::Error, format!("Open failed: {error}")),
+        }
+    }
+
+    fn share_current(&mut self) {
+        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            self.set_status(StatusKind::Warning, "No post to share");
+            return;
+        };
+        let Some(command) = self.config.share_command() else {
+            self.set_status(
+                StatusKind::Warning,
+                "No share command configured; set `share` in config.toml",
+            );
+            return;
+        };
+        match run_command_with_url(&command, &url) {
+            Ok(()) => self.set_status(StatusKind::Success, format!("Shared with {command}")),
+            Err(error) => self.set_status(StatusKind::Error, format!("Share failed: {error}")),
         }
     }
 
@@ -719,7 +738,7 @@ fn try_external_clipboard(text: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn open_in_browser(command: &str, url: &str) -> Result<()> {
+fn run_command_with_url(command: &str, url: &str) -> Result<()> {
     let quoted = shell_quote(url);
     let script = if command.contains("{}") {
         command.replace("{}", &quoted)
@@ -735,7 +754,7 @@ fn open_in_browser(command: &str, url: &str) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .with_context(|| format!("spawning browser command '{command}'"))?;
+        .with_context(|| format!("spawning command '{command}'"))?;
     thread::spawn(move || {
         let _ = child.wait();
     });
@@ -743,14 +762,14 @@ fn open_in_browser(command: &str, url: &str) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn open_in_browser(command: &str, url: &str) -> Result<()> {
+fn run_command_with_url(command: &str, url: &str) -> Result<()> {
     let mut child = Command::new("cmd")
         .args(["/C", &format!("{command} \"{url}\"")])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .with_context(|| format!("spawning browser command '{command}'"))?;
+        .with_context(|| format!("spawning command '{command}'"))?;
     thread::spawn(move || {
         let _ = child.wait();
     });
