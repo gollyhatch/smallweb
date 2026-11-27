@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashSet, VecDeque};
-use std::io::{Cursor, Write as _};
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -7,7 +7,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
+use copypasta::{ClipboardContext, ClipboardProvider};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -90,7 +91,7 @@ pub struct App {
     pub seen_posts: Vec<Post>,
     seen: HashSet<String>,
     pub history_search: Option<HistorySearch>,
-    pub clipboard: Option<arboard::Clipboard>,
+    clipboard: Option<ClipboardContext>,
     pub quit: bool,
     pub tick: u64,
     epoch: u64,
@@ -1201,64 +1202,21 @@ fn fallback_topics() -> Vec<Topic> {
     topics
 }
 
-fn copy_to_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str) -> Result<()> {
-    if try_external_clipboard(text) {
-        return Ok(());
-    }
-
+fn copy_to_clipboard(clipboard: &mut Option<ClipboardContext>, text: &str) -> Result<()> {
     if clipboard.is_none() {
-        *clipboard = arboard::Clipboard::new().ok();
+        *clipboard = ClipboardContext::new().ok();
     }
-    if let Some(cb) = clipboard.as_mut() {
-        if cb.set_text(text.to_string()).is_ok() {
-            return Ok(());
-        }
-    }
-    *clipboard = None;
-    bail!("no clipboard backend available (tried wl-copy, xclip, xsel, pbcopy, arboard)")
-}
-
-fn try_external_clipboard(text: &str) -> bool {
-    let mut commands: Vec<(&str, &[&str])> = Vec::new();
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        commands.push(("wl-copy", &[]));
-    }
-    if std::env::var_os("DISPLAY").is_some() {
-        commands.push(("xclip", &["-selection", "clipboard"]));
-        commands.push(("xsel", &["--clipboard", "--input"]));
-    }
-    #[cfg(target_os = "macos")]
-    commands.push(("pbcopy", &[]));
-    if commands.is_empty() {
-        commands.extend([
-            ("wl-copy", &[][..]),
-            ("xclip", &["-selection", "clipboard"][..]),
-            ("xsel", &["--clipboard", "--input"][..]),
-            ("pbcopy", &[][..]),
-        ]);
-    }
-
-    for (command, args) in commands {
-        let Ok(mut child) = Command::new(command)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            continue;
+    let result = {
+        let Some(clipboard) = clipboard.as_mut() else {
+            bail!("could not initialize the system clipboard");
         };
-        if let Some(stdin) = child.stdin.as_mut() {
-            if stdin.write_all(text.as_bytes()).is_err() {
-                let _ = child.wait();
-                continue;
-            }
-        }
-        if child.wait().is_ok_and(|status| status.success()) {
-            return true;
-        }
+        clipboard.set_contents(text.to_string())
+    };
+    if let Err(error) = result {
+        *clipboard = None;
+        return Err(anyhow!("copying to the system clipboard: {error}"));
     }
-    false
+    Ok(())
 }
 
 #[cfg(unix)]

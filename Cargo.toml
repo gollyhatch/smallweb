@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+copypasta = "0.10"
 crossterm = "0.29"
 dom_smoothie = "0.20"
 encoding_rs = "0.8"
