@@ -23,6 +23,7 @@ cargo install --path .
 | Key | Action |
 | --- | --- |
 | `n`, `→`, `]` | Next random post |
+| `b`, `←` | Go back to the previous post |
 | `l` | Like the current post (sent to Kagi) |
 | `y` | Copy the original URL |
 | `o`, `Enter` | Open the original post in the configured browser |
@@ -41,6 +42,9 @@ cargo install --path .
 In the topic picker: `Space` toggles, `a` selects all, `c` clears, `Enter` applies and saves the
 selection to `config.toml`, and `Esc` cancels. Selected topics are ORed; an empty selection means
 all topics.
+
+Posts seen during the session are remembered, so the random deck does not offer them again, and
+`b` walks back through the posts you have viewed. History is kept for the current session.
 
 ## Configuration
 

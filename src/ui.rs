@@ -276,6 +276,8 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     let help = Line::from(vec![
         Span::styled("n", key),
         Span::styled(" next  ", label),
+        Span::styled("b", key),
+        Span::styled(" back  ", label),
         Span::styled("l", key),
         Span::styled(" like  ", label),
         Span::styled("y", key),
@@ -434,6 +436,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
     let label_style = muted_style(theme);
     let rows = [
         ("n / → / ]", "next random post"),
+        ("b / ←", "go back to the previous post"),
         ("l", "like the post (sent to Kagi)"),
         ("y", "copy the original URL"),
         ("o / enter", "open the original post in your browser"),

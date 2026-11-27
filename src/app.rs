@@ -19,6 +19,7 @@ use crate::article::{self, Article};
 use crate::config::{Config, save_topics};
 
 const QUEUE_TARGET: usize = 4;
+const HISTORY_LIMIT: usize = 100;
 const STATUS_TTL: Duration = Duration::from_secs(7);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,8 @@ pub struct App {
     pub article_height: usize,
     pub liked: HashSet<String>,
     pub liking: HashSet<String>,
+    history: Vec<Post>,
+    seen: HashSet<String>,
     pub clipboard: Option<arboard::Clipboard>,
     pub quit: bool,
     pub tick: u64,
@@ -115,6 +118,8 @@ impl App {
             article_height: 10,
             liked: HashSet::new(),
             liking: HashSet::new(),
+            history: Vec::new(),
+            seen: HashSet::new(),
             clipboard: None,
             quit: false,
             tick: 0,
@@ -158,10 +163,7 @@ impl App {
                     Ok(posts) => {
                         let mut appended = 0;
                         for post in posts {
-                            if self
-                                .current
-                                .as_ref()
-                                .is_some_and(|current| current.url == post.url)
+                            if self.seen.contains(&post.url)
                                 || self.queue.iter().any(|queued| queued.url == post.url)
                             {
                                 continue;
@@ -176,12 +178,14 @@ impl App {
                         } else if self.pending_next {
                             if let Some(post) = self.queue.pop_front() {
                                 self.pending_next = false;
+                                self.remember_current();
                                 self.show_post(post);
                             }
                         }
                         if appended > 0 && self.queue.len() < QUEUE_TARGET {
                             self.ensure_queue();
                         } else if self.current.is_none() || self.pending_next {
+                            let retry_key = if self.current.is_some() { "n" } else { "r" };
                             self.pending_next = false;
                             let suffix = topic
                                 .as_deref()
@@ -189,7 +193,7 @@ impl App {
                                 .unwrap_or_default();
                             self.set_status(
                                 StatusKind::Warning,
-                                format!("No posts{suffix}; press r to retry"),
+                                format!("No posts{suffix}; press {retry_key} to retry"),
                             );
                         }
                     }
@@ -381,6 +385,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('n') | KeyCode::Right | KeyCode::Char(']') => self.next_post(),
+            KeyCode::Char('b') | KeyCode::Left => self.previous_post(),
             KeyCode::Char('l') => self.like_current(),
             KeyCode::Char('y') => self.copy_current_url(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
@@ -421,6 +426,7 @@ impl App {
     fn next_post(&mut self) {
         if let Some(post) = self.queue.pop_front() {
             self.pending_next = false;
+            self.remember_current();
             self.show_post(post);
             self.ensure_queue();
             return;
@@ -430,9 +436,34 @@ impl App {
         self.ensure_queue();
     }
 
+    fn previous_post(&mut self) {
+        let Some(post) = self.history.pop() else {
+            self.set_status(StatusKind::Info, "No previous post");
+            return;
+        };
+        self.pending_next = false;
+        self.show_post(post);
+        self.ensure_queue();
+    }
+
+    fn remember_current(&mut self) {
+        let Some(post) = self.current.as_ref() else {
+            return;
+        };
+        if self.history.last().is_some_and(|last| last.url == post.url) {
+            return;
+        }
+        self.history.push(post.clone());
+        if self.history.len() > HISTORY_LIMIT {
+            let overflow = self.history.len() - HISTORY_LIMIT;
+            self.history.drain(..overflow);
+        }
+    }
+
     fn show_post(&mut self, post: Post) {
         let url = post.url.clone();
         let title = post.title.clone();
+        self.seen.insert(url.clone());
         self.current = Some(post);
         self.pending_next = false;
         self.status = None;
@@ -459,6 +490,7 @@ impl App {
     }
 
     fn refresh_feed(&mut self) {
+        self.remember_current();
         self.epoch = self.epoch.wrapping_add(1);
         self.fetching_deck = false;
         self.pending_next = false;

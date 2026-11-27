@@ -225,6 +225,6 @@ Config example:
   share = \"toot post\"             # optional; receives the post URL
   topics = [\"programming\", \"science\"]
 
-Keys: n next · l like · y copy URL · o open · S share · t topics · T theme · ? help · q quit"
+Keys: n next · b back · l like · y copy URL · o open · S share · t topics · T theme · ? help · q quit"
     );
 }
