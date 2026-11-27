@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use opaline::Theme;
 use opaline::widgets::{ThemeSelectorAction, ThemeSelectorState};
 use ratatui::text::Line;
@@ -20,6 +22,7 @@ use crate::config::{Config, save_theme, save_topics};
 
 const QUEUE_TARGET: usize = 4;
 const HISTORY_LIMIT: usize = 100;
+const SEEN_LIMIT: usize = 200;
 const MAX_IMAGES: usize = 12;
 const MAX_IMAGE_WIDTH: u32 = 200;
 const MAX_IMAGE_HEIGHT: u32 = 400;
@@ -79,7 +82,9 @@ pub struct App {
     pub liked: HashSet<String>,
     pub liking: HashSet<String>,
     history: Vec<Post>,
+    pub seen_posts: Vec<Post>,
     seen: HashSet<String>,
+    pub history_search: Option<HistorySearch>,
     pub clipboard: Option<arboard::Clipboard>,
     pub quit: bool,
     pub tick: u64,
@@ -122,7 +127,9 @@ impl App {
             liked: HashSet::new(),
             liking: HashSet::new(),
             history: Vec::new(),
+            seen_posts: Vec::new(),
             seen: HashSet::new(),
+            history_search: None,
             clipboard: None,
             quit: false,
             tick: 0,
@@ -336,6 +343,11 @@ impl App {
             return;
         }
 
+        if self.history_search.is_some() {
+            self.handle_history_key(key);
+            return;
+        }
+
         match self.view {
             View::Help => {
                 if matches!(
@@ -450,6 +462,7 @@ impl App {
             KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
             KeyCode::Char('S') => self.share_current(),
             KeyCode::Char('i') => self.toggle_images(),
+            KeyCode::Char('H') => self.open_history(),
             KeyCode::Char('t') => self.open_topics(),
             KeyCode::Char('T') => self.open_themes(),
             KeyCode::Char('?') | KeyCode::F(1) => self.view = View::Help,
@@ -465,6 +478,97 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => self.scroll_to_bottom(),
             _ => {}
         }
+    }
+
+    fn open_history(&mut self) {
+        if self.seen_posts.is_empty() {
+            self.set_status(StatusKind::Warning, "No seen posts yet");
+            return;
+        }
+        let mut list = ListState::default();
+        list.select(Some(0));
+        self.history_search = Some(HistorySearch {
+            query: String::new(),
+            list,
+        });
+    }
+
+    fn handle_history_key(&mut self, key: KeyEvent) {
+        let query = self
+            .history_search
+            .as_ref()
+            .map(|search| search.query.clone())
+            .unwrap_or_default();
+        let count = history_matches(&self.seen_posts, &query).len();
+        let mut open = false;
+        let mut share = false;
+        let mut close = false;
+
+        {
+            let search = self
+                .history_search
+                .as_mut()
+                .expect("history search is open");
+            match key.code {
+                KeyCode::Esc => close = true,
+                KeyCode::Enter => open = true,
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    share = true;
+                }
+                KeyCode::Up => move_selection(&mut search.list, -1, count),
+                KeyCode::Down => move_selection(&mut search.list, 1, count),
+                KeyCode::PageUp => move_selection(&mut search.list, -8, count),
+                KeyCode::PageDown => move_selection(&mut search.list, 8, count),
+                KeyCode::Home => search.list.select(Some(0)),
+                KeyCode::End => search.list.select(Some(count.saturating_sub(1))),
+                KeyCode::Backspace => {
+                    if search.query.pop().is_some() {
+                        search.list = ListState::default();
+                        search.list.select(Some(0));
+                    }
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    search.query.clear();
+                    search.list = ListState::default();
+                    search.list.select(Some(0));
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    search.query.push(character);
+                    search.list = ListState::default();
+                    search.list.select(Some(0));
+                }
+                _ => {}
+            }
+        }
+
+        if close {
+            self.history_search = None;
+            return;
+        }
+        if open || share {
+            let Some(post) = self.selected_history_post() else {
+                self.set_status(StatusKind::Warning, "No matching post");
+                return;
+            };
+            self.history_search = None;
+            if open {
+                self.open_url(&post.url);
+            } else {
+                self.share_url(&post.url);
+            }
+        }
+    }
+
+    fn selected_history_post(&self) -> Option<Post> {
+        let search = self.history_search.as_ref()?;
+        let selected = search.list.selected().unwrap_or(0);
+        history_matches(&self.seen_posts, &search.query)
+            .get(selected)
+            .map(|post| (*post).clone())
     }
 
     fn open_topics(&mut self) {
@@ -525,6 +629,12 @@ impl App {
         let url = post.url.clone();
         let title = post.title.clone();
         self.seen.insert(url.clone());
+        self.seen_posts.retain(|seen| seen.url != url);
+        self.seen_posts.push(post.clone());
+        if self.seen_posts.len() > SEEN_LIMIT {
+            let overflow = self.seen_posts.len() - SEEN_LIMIT;
+            self.seen_posts.drain(..overflow);
+        }
         self.current = Some(post);
         self.pending_next = false;
         self.status = None;
@@ -686,8 +796,12 @@ impl App {
             self.set_status(StatusKind::Warning, "No post to open");
             return;
         };
+        self.open_url(&url);
+    }
+
+    fn open_url(&mut self, url: &str) {
         let command = self.config.browser_command();
-        match run_command_with_url(&command, &url) {
+        match run_command_with_url(&command, url) {
             Ok(()) => self.set_status(StatusKind::Success, format!("Opened with {command}")),
             Err(error) => self.set_status(StatusKind::Error, format!("Open failed: {error}")),
         }
@@ -698,6 +812,10 @@ impl App {
             self.set_status(StatusKind::Warning, "No post to share");
             return;
         };
+        self.share_url(&url);
+    }
+
+    fn share_url(&mut self, url: &str) {
         let Some(command) = self.config.share_command() else {
             self.set_status(
                 StatusKind::Warning,
@@ -705,7 +823,7 @@ impl App {
             );
             return;
         };
-        match run_command_with_url(&command, &url) {
+        match run_command_with_url(&command, url) {
             Ok(()) => self.set_status(StatusKind::Success, format!("Shared with {command}")),
             Err(error) => self.set_status(StatusKind::Error, format!("Share failed: {error}")),
         }
@@ -821,6 +939,57 @@ impl App {
     pub fn is_liked(&self, url: &str) -> bool {
         self.liked.contains(url)
     }
+}
+
+pub struct HistorySearch {
+    pub query: String,
+    pub list: ListState,
+}
+
+pub fn history_matches<'a>(posts: &'a [Post], query: &str) -> Vec<&'a Post> {
+    let terms: Vec<&str> = query.split_whitespace().collect();
+    if terms.is_empty() {
+        return posts.iter().rev().collect();
+    }
+
+    let matcher = SkimMatcherV2::default().ignore_case();
+    let mut scored: Vec<(i64, usize, &Post)> = posts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, post)| {
+            let topics = post.topics.join(" ");
+            let fields = [
+                (post.title.as_str(), 4),
+                (post.domain.as_str(), 2),
+                (post.author.as_str(), 2),
+                (topics.as_str(), 2),
+                (post.url.as_str(), 1),
+            ];
+            let mut total = 0;
+            for term in &terms {
+                let score = fields
+                    .iter()
+                    .filter_map(|(value, weight)| {
+                        matcher.fuzzy_match(value, term).map(|score| score * weight)
+                    })
+                    .max()?;
+                total += score;
+            }
+            Some((total, index, post))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    scored.into_iter().map(|(_, _, post)| post).collect()
+}
+
+fn move_selection(list: &mut ListState, delta: i32, count: usize) {
+    if count == 0 {
+        list.select(None);
+        return;
+    }
+    let current = list.selected().unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, count.saturating_sub(1) as i32) as usize;
+    list.select(Some(next));
 }
 
 #[derive(Debug)]
@@ -1030,6 +1199,53 @@ mod tests {
             Line::from("second"),
         ];
         assert_eq!(next_paragraph_start(&lines, 0), Some(2));
+    }
+
+    #[test]
+    fn fuzzy_searches_history_and_ranks_matches() {
+        let post = |title: &str, domain: &str, url: &str| Post {
+            title: title.to_string(),
+            url: url.to_string(),
+            domain: domain.to_string(),
+            author: String::new(),
+            topics: Vec::new(),
+        };
+        let posts = vec![
+            post(
+                "Rust async runtimes",
+                "example.com",
+                "https://example.com/a",
+            ),
+            post("Garden notes", "rust.garden", "https://rust.garden/b"),
+            post("Async patterns", "patterns.dev", "https://patterns.dev/c"),
+        ];
+
+        let results = history_matches(&posts, "async rust");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Rust async runtimes");
+
+        let results = history_matches(&posts, "rst");
+        assert_eq!(results[0].title, "Rust async runtimes");
+
+        let results = history_matches(&posts, "gardn");
+        assert_eq!(results[0].title, "Garden notes");
+
+        assert!(history_matches(&posts, "zzzzz").is_empty());
+    }
+
+    #[test]
+    fn empty_history_query_keeps_recency_order() {
+        let post = |title: &str| Post {
+            title: title.to_string(),
+            url: format!("https://example.com/{title}"),
+            domain: "example.com".to_string(),
+            author: String::new(),
+            topics: Vec::new(),
+        };
+        let posts = vec![post("old"), post("new")];
+        let results = history_matches(&posts, "");
+        assert_eq!(results[0].title, "new");
+        assert_eq!(results[1].title, "old");
     }
 
     #[test]

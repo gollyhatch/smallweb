@@ -12,7 +12,7 @@ use ratatui::widgets::{
 };
 use textwrap::Options;
 
-use crate::app::{App, ArticleState, StatusKind, View};
+use crate::app::{App, ArticleState, StatusKind, View, history_matches};
 use crate::article::{Article, ArticleImage, BlockKind};
 
 const MAX_TEXT_WIDTH: u16 = 100;
@@ -50,6 +50,10 @@ pub fn render(app: &mut App, frame: &mut Frame<'_>) {
         View::Topics => render_topics(app, frame, &theme),
         View::Help => render_help(app, frame, &theme),
         View::Reader => {}
+    }
+
+    if app.history_search.is_some() {
+        render_history(app, frame, &theme);
     }
 }
 
@@ -289,6 +293,8 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         Span::styled(" share  ", label),
         Span::styled("i", key),
         Span::styled(" images  ", label),
+        Span::styled("H", key),
+        Span::styled(" history  ", label),
         Span::styled("t", key),
         Span::styled(" topics  ", label),
         Span::styled("T", key),
@@ -321,6 +327,115 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         Paragraph::new(Line::from(Span::styled(text, style))),
         row(area, 1),
     );
+}
+
+fn render_history(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
+    let area = frame.area();
+    let popup = centered(area, area.width.min(100), area.height.min(30));
+    frame.render_widget(Clear, popup);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(" History ")
+        .border_style(Style::from(theme.style("focused_border")))
+        .style(Style::default().bg(color(theme, "bg.panel")));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.height < 3 {
+        return;
+    }
+
+    let chunks = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+
+    let query = app
+        .history_search
+        .as_ref()
+        .map(|search| search.query.clone())
+        .unwrap_or_default();
+    let selected = app
+        .history_search
+        .as_ref()
+        .and_then(|search| search.list.selected())
+        .unwrap_or(0);
+    let results = history_matches(&app.seen_posts, &query);
+    let count = results.len();
+    let muted = muted_style(theme);
+    let accent = Style::default().fg(color(theme, "accent.primary"));
+
+    let search_line = Line::from(vec![
+        Span::styled("search: ", muted),
+        Span::styled(query, accent),
+        Span::styled("▏", accent),
+    ]);
+    frame.render_widget(Paragraph::new(search_line), row(chunks[0], 0));
+    let count_label = format!("{count} result{}", if count == 1 { "" } else { "s" });
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(count_label, muted))).alignment(Alignment::Right),
+        row(chunks[0], 0),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Type to fuzzy-search by title, domain, author, URL or topic",
+            Style::default().fg(color(theme, "text.dim")),
+        ))),
+        row(chunks[0], 1),
+    );
+
+    if count == 0 {
+        frame.render_widget(Paragraph::new("No matching posts.").style(muted), chunks[1]);
+    } else {
+        let current_url = app.current.as_ref().map(|post| post.url.as_str());
+        let items: Vec<ListItem<'_>> = results
+            .iter()
+            .map(|post| {
+                let mut spans = vec![Span::styled(
+                    one_line(&post.title),
+                    Style::default().fg(color(theme, "text.primary")),
+                )];
+                if !post.domain.is_empty() {
+                    spans.push(Span::styled(format!("  {}", post.domain), muted));
+                }
+                if current_url == Some(post.url.as_str()) {
+                    spans.push(Span::styled(
+                        "  (current)",
+                        Style::default().fg(color(theme, "accent.secondary")),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+        let selected = selected.min(count - 1);
+        let search = app.history_search.as_mut().expect("history search is open");
+        search.list.select(Some(selected));
+        let list = List::new(items)
+            .highlight_symbol("› ")
+            .highlight_style(Style::from(theme.style("active_selected")));
+        frame.render_stateful_widget(list, chunks[1], &mut search.list);
+    }
+
+    let footer = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("type", key_style(theme)),
+            Span::styled(" filter  ", muted),
+            Span::styled("↑↓", key_style(theme)),
+            Span::styled(" select  ", muted),
+            Span::styled("enter", key_style(theme)),
+            Span::styled(" open  ", muted),
+            Span::styled("ctrl+s", key_style(theme)),
+            Span::styled(" share  ", muted),
+            Span::styled("esc", key_style(theme)),
+            Span::styled(" close", muted),
+        ]),
+        Line::from(Span::styled(
+            "Seen posts are kept for this session.",
+            Style::default().fg(color(theme, "text.dim")),
+        )),
+    ]);
+    frame.render_widget(footer, chunks[2]);
 }
 
 fn render_topics(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
@@ -445,6 +560,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("o / enter", "open the original post in your browser"),
         ("S", "run the configured share command with the post URL"),
         ("i", "toggle inline images"),
+        ("H", "fuzzy-search the history of seen posts"),
         ("t", "choose topics"),
         ("T", "choose and save a theme (live preview)"),
         ("j / k", "scroll one line"),

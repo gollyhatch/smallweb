@@ -29,6 +29,7 @@ cargo install --path .
 | `o`, `Enter` | Open the original post in the configured browser |
 | `S` | Run the configured share command with the post URL |
 | `i` | Toggle inline images |
+| `H` | Fuzzy-search the history of seen posts |
 | `t` | Select topics to filter random posts |
 | `T` | Theme picker with live preview; selection is saved |
 | `j`/`k`, `↑`/`↓` | Scroll one line |
@@ -46,7 +47,10 @@ selection to `config.toml`, and `Esc` cancels. Selected topics are ORed; an empt
 all topics.
 
 Posts seen during the session are remembered, so the random deck does not offer them again, and
-`b` walks back through the posts you have viewed. History is kept for the current session.
+`b` walks back through the posts you have viewed. `H` opens a fuzzy-searchable history: type to
+filter and rank by title, domain, author, URL, or topic; select with `↑`/`↓`; `Enter` opens the
+post in the browser; `Ctrl+S` shares it with the configured share command. History is kept for the
+current session.
 
 ## Configuration
 
