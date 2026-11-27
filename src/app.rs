@@ -1,0 +1,788 @@
+use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use opaline::Theme;
+use opaline::widgets::{ThemeSelectorAction, ThemeSelectorState};
+use ratatui::text::Line;
+use ratatui::widgets::ListState;
+
+use crate::api::{Api, FALLBACK_TOPICS, LikeOutcome, Post, Topic};
+use crate::article::{self, Article};
+use crate::config::Config;
+
+const QUEUE_TARGET: usize = 4;
+const STATUS_TTL: Duration = Duration::from_secs(7);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Reader,
+    Topics,
+    Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Debug)]
+pub struct Status {
+    pub message: String,
+    pub kind: StatusKind,
+    pub at: Instant,
+}
+
+#[derive(Debug)]
+pub enum ArticleState {
+    Empty,
+    Loading,
+    Ready(Article),
+    Error { url: String, message: String },
+}
+
+pub struct App {
+    pub api: Api,
+    tx: Sender<Msg>,
+    rx: Receiver<Msg>,
+    pub config: Config,
+    pub config_path: PathBuf,
+    pub current: Option<Post>,
+    pub queue: VecDeque<Post>,
+    pub article: ArticleState,
+    pub topics: Vec<Topic>,
+    pub selected_topics: BTreeSet<String>,
+    pub topic_draft: BTreeSet<String>,
+    pub topic_list: ListState,
+    pub view: View,
+    pub theme_selector: Option<ThemeSelectorState>,
+    pub status: Option<Status>,
+    pub scroll: usize,
+    pub article_lines: Vec<Line<'static>>,
+    pub lines_width: u16,
+    pub lines_theme: Option<Arc<Theme>>,
+    pub article_height: usize,
+    pub liked: HashSet<String>,
+    pub liking: HashSet<String>,
+    pub clipboard: Option<arboard::Clipboard>,
+    pub quit: bool,
+    pub tick: u64,
+    epoch: u64,
+    topic_rotation: usize,
+    fetching_deck: bool,
+    pending_next: bool,
+}
+
+impl App {
+    pub fn new(config: Config, config_path: PathBuf, selected_topics: Vec<String>) -> Result<Self> {
+        let api = Api::new()?;
+        let (tx, rx) = mpsc::channel();
+        let selected_topics: BTreeSet<String> = selected_topics
+            .into_iter()
+            .map(|topic| topic.trim().to_string())
+            .filter(|topic| !topic.is_empty())
+            .collect();
+        let mut app = Self {
+            api,
+            tx,
+            rx,
+            config,
+            config_path,
+            current: None,
+            queue: VecDeque::new(),
+            article: ArticleState::Empty,
+            topics: fallback_topics(),
+            selected_topics,
+            topic_draft: BTreeSet::new(),
+            topic_list: ListState::default(),
+            view: View::Reader,
+            theme_selector: None,
+            status: None,
+            scroll: 0,
+            article_lines: Vec::new(),
+            lines_width: 0,
+            lines_theme: None,
+            article_height: 10,
+            liked: HashSet::new(),
+            liking: HashSet::new(),
+            clipboard: None,
+            quit: false,
+            tick: 0,
+            epoch: 0,
+            topic_rotation: 0,
+            fetching_deck: false,
+            pending_next: false,
+        };
+        app.spawn_topics();
+        app.refresh_feed();
+        Ok(app)
+    }
+
+    pub fn tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+        if let Some(status) = &self.status {
+            if status.kind != StatusKind::Error && status.at.elapsed() > STATUS_TTL {
+                self.status = None;
+            }
+        }
+    }
+
+    pub fn poll_messages(&mut self) {
+        while let Ok(message) = self.rx.try_recv() {
+            self.handle_message(message);
+        }
+    }
+
+    fn handle_message(&mut self, message: Msg) {
+        match message {
+            Msg::Deck {
+                epoch,
+                topic,
+                result,
+            } => {
+                if epoch != self.epoch {
+                    return;
+                }
+                self.fetching_deck = false;
+                match result {
+                    Ok(posts) => {
+                        let mut appended = 0;
+                        for post in posts {
+                            if self
+                                .current
+                                .as_ref()
+                                .is_some_and(|current| current.url == post.url)
+                                || self.queue.iter().any(|queued| queued.url == post.url)
+                            {
+                                continue;
+                            }
+                            self.queue.push_back(post);
+                            appended += 1;
+                        }
+                        if self.current.is_none() {
+                            if let Some(post) = self.queue.pop_front() {
+                                self.show_post(post);
+                            }
+                        } else if self.pending_next {
+                            if let Some(post) = self.queue.pop_front() {
+                                self.pending_next = false;
+                                self.show_post(post);
+                            }
+                        }
+                        if appended > 0 && self.queue.len() < QUEUE_TARGET {
+                            self.ensure_queue();
+                        } else if self.current.is_none() || self.pending_next {
+                            self.pending_next = false;
+                            let suffix = topic
+                                .as_deref()
+                                .map(|topic| format!(" for topic '{topic}'"))
+                                .unwrap_or_default();
+                            self.set_status(
+                                StatusKind::Warning,
+                                format!("No posts{suffix}; press r to retry"),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        self.set_status(
+                            StatusKind::Error,
+                            format!("Could not load posts: {error}"),
+                        );
+                    }
+                }
+            }
+            Msg::Article { url, result } => {
+                if !self.current.as_ref().is_some_and(|post| post.url == url) {
+                    return;
+                }
+                match result {
+                    Ok(article) => {
+                        let fallback = article.used_fallback;
+                        self.article = ArticleState::Ready(article);
+                        self.reset_article_view();
+                        if fallback {
+                            self.set_status(
+                                StatusKind::Warning,
+                                "Readability failed; showing the page's raw text",
+                            );
+                        } else {
+                            self.status = None;
+                        }
+                    }
+                    Err(error) => {
+                        self.article = ArticleState::Error {
+                            url,
+                            message: error.clone(),
+                        };
+                        self.reset_article_view();
+                        self.set_status(
+                            StatusKind::Error,
+                            format!("Could not extract article: {error}"),
+                        );
+                    }
+                }
+            }
+            Msg::Like { url, result } => {
+                self.liking.remove(&url);
+                match result {
+                    Ok(outcome) => {
+                        self.liked.insert(url);
+                        let message = if outcome.likes_total > 0 {
+                            format!("♥ liked · {} total", outcome.likes_total)
+                        } else {
+                            "♥ liked".to_string()
+                        };
+                        self.set_status(StatusKind::Success, message);
+                    }
+                    Err(error) => {
+                        self.set_status(StatusKind::Error, format!("Could not like post: {error}"));
+                    }
+                }
+            }
+            Msg::Topics(result) => match result {
+                Ok(topics) if !topics.is_empty() => {
+                    self.topics = topics;
+                    if self.topic_list.selected().is_none() {
+                        self.topic_list.select(Some(0));
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.set_status(
+                        StatusKind::Warning,
+                        format!("Could not refresh topics: {error}"),
+                    );
+                }
+            },
+        }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) {
+        if key.kind == KeyEventKind::Release {
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            self.quit = true;
+            return;
+        }
+
+        if self.theme_selector.is_some() {
+            self.handle_theme_key(key);
+            return;
+        }
+
+        match self.view {
+            View::Help => {
+                if matches!(
+                    key.code,
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?')
+                ) {
+                    self.view = View::Reader;
+                }
+            }
+            View::Topics => self.handle_topic_key(key),
+            View::Reader => self.handle_reader_key(key),
+        }
+    }
+
+    fn handle_theme_key(&mut self, key: KeyEvent) {
+        let (action, selected) = {
+            let selector = self
+                .theme_selector
+                .as_mut()
+                .expect("theme selector is open");
+            (selector.handle_key(key), selector.selected_theme().cloned())
+        };
+        match action {
+            ThemeSelectorAction::Select(_) => {
+                self.theme_selector = None;
+                let name = selected
+                    .map(|theme| theme.display_name)
+                    .unwrap_or_else(|| opaline::current().meta.name.clone());
+                self.set_status(StatusKind::Success, format!("Theme: {name}"));
+            }
+            ThemeSelectorAction::Cancel => {
+                self.theme_selector = None;
+                self.set_status(StatusKind::Info, "Theme unchanged");
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_topic_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.view = View::Reader;
+            }
+            KeyCode::Enter => {
+                self.selected_topics = self.topic_draft.clone();
+                self.view = View::Reader;
+                let label = self.filter_label();
+                self.set_status(StatusKind::Success, format!("Filter: {label}"));
+                self.refresh_feed();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let current = self.topic_list.selected().unwrap_or(0);
+                if current + 1 < self.topics.len() {
+                    self.topic_list.select(Some(current + 1));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let current = self.topic_list.selected().unwrap_or(0);
+                self.topic_list.select(Some(current.saturating_sub(1)));
+            }
+            KeyCode::Home => {
+                self.topic_list.select(Some(0));
+            }
+            KeyCode::End => {
+                self.topic_list
+                    .select(Some(self.topics.len().saturating_sub(1)));
+            }
+            KeyCode::Char(' ') => {
+                if let Some(topic) = self.topics.get(self.topic_list.selected().unwrap_or(0)) {
+                    let slug = topic.slug.clone();
+                    if !self.topic_draft.remove(&slug) {
+                        self.topic_draft.insert(slug);
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                self.topic_draft = self.topics.iter().map(|topic| topic.slug.clone()).collect();
+            }
+            KeyCode::Char('c') => {
+                self.topic_draft.clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_reader_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('n') | KeyCode::Right | KeyCode::Char(']') => self.next_post(),
+            KeyCode::Char('l') => self.like_current(),
+            KeyCode::Char('y') => self.copy_current_url(),
+            KeyCode::Char('o') | KeyCode::Enter => self.open_current(),
+            KeyCode::Char('t') => self.open_topics(),
+            KeyCode::Char('T') => self.open_themes(),
+            KeyCode::Char('?') | KeyCode::F(1) => self.view = View::Help,
+            KeyCode::Char('r') => self.reload(),
+            KeyCode::Char('j') | KeyCode::Down => self.scroll_by(1),
+            KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_page(1),
+            KeyCode::PageUp => self.scroll_page(-1),
+            KeyCode::Char('g') | KeyCode::Home => self.scroll_to_top(),
+            KeyCode::Char('G') | KeyCode::End => self.scroll_to_bottom(),
+            _ => {}
+        }
+    }
+
+    fn open_topics(&mut self) {
+        self.topic_draft = self.selected_topics.clone();
+        if self.topics.is_empty() {
+            self.set_status(StatusKind::Warning, "No topics available yet");
+            return;
+        }
+        if self.topic_list.selected().is_none() {
+            self.topic_list.select(Some(0));
+        }
+        self.view = View::Topics;
+    }
+
+    fn open_themes(&mut self) {
+        let selector = ThemeSelectorState::with_current_selected();
+        self.theme_selector = Some(selector);
+    }
+
+    fn next_post(&mut self) {
+        if let Some(post) = self.queue.pop_front() {
+            self.pending_next = false;
+            self.show_post(post);
+            self.ensure_queue();
+            return;
+        }
+        self.pending_next = true;
+        self.set_status(StatusKind::Info, "Loading the next post…");
+        self.ensure_queue();
+    }
+
+    fn show_post(&mut self, post: Post) {
+        let url = post.url.clone();
+        let title = post.title.clone();
+        self.current = Some(post);
+        self.pending_next = false;
+        self.status = None;
+        self.article = ArticleState::Loading;
+        self.reset_article_view();
+        self.spawn_article(url, title);
+    }
+
+    fn reset_article_view(&mut self) {
+        self.scroll = 0;
+        self.article_lines.clear();
+        self.lines_width = 0;
+        self.lines_theme = None;
+    }
+
+    fn reload(&mut self) {
+        if let Some(post) = self.current.clone() {
+            self.article = ArticleState::Loading;
+            self.reset_article_view();
+            self.spawn_article(post.url, post.title);
+        } else {
+            self.refresh_feed();
+        }
+    }
+
+    fn refresh_feed(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.fetching_deck = false;
+        self.pending_next = false;
+        self.queue.clear();
+        self.current = None;
+        self.article = ArticleState::Empty;
+        self.topic_rotation = 0;
+        self.reset_article_view();
+        self.ensure_queue();
+    }
+
+    fn ensure_queue(&mut self) {
+        if self.fetching_deck || self.queue.len() >= QUEUE_TARGET {
+            return;
+        }
+        self.start_deck_fetch();
+    }
+
+    fn start_deck_fetch(&mut self) {
+        if self.fetching_deck {
+            return;
+        }
+        let topic = self.next_topic_slug();
+        let epoch = self.epoch;
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        self.fetching_deck = true;
+        thread::spawn(move || {
+            let result = api.deck(topic.as_deref()).map_err(format_error);
+            let _ = tx.send(Msg::Deck {
+                epoch,
+                topic,
+                result,
+            });
+        });
+    }
+
+    fn next_topic_slug(&mut self) -> Option<String> {
+        if self.selected_topics.is_empty() {
+            return None;
+        }
+        let index = self.topic_rotation % self.selected_topics.len();
+        self.topic_rotation = self.topic_rotation.wrapping_add(1);
+        self.selected_topics.iter().nth(index).cloned()
+    }
+
+    fn spawn_article(&self, url: String, fallback_title: String) {
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = api
+                .fetch_html(&url)
+                .and_then(|html| article::extract(&html, &url, &fallback_title))
+                .map_err(format_error);
+            let _ = tx.send(Msg::Article { url, result });
+        });
+    }
+
+    fn spawn_topics(&self) {
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(Msg::Topics(api.topics().map_err(format_error)));
+        });
+    }
+
+    fn like_current(&mut self) {
+        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            self.set_status(StatusKind::Warning, "No post to like");
+            return;
+        };
+        if self.liked.contains(&url) {
+            self.set_status(StatusKind::Info, "You already liked this post");
+            return;
+        }
+        if !self.liking.insert(url.clone()) {
+            self.set_status(StatusKind::Info, "Like already in flight");
+            return;
+        }
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        let like_url = url.clone();
+        thread::spawn(move || {
+            let result = api.like(&like_url).map_err(format_error);
+            let _ = tx.send(Msg::Like {
+                url: like_url,
+                result,
+            });
+        });
+        self.set_status(StatusKind::Info, "Liking…");
+    }
+
+    fn copy_current_url(&mut self) {
+        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            self.set_status(StatusKind::Warning, "No post to copy");
+            return;
+        };
+        match copy_to_clipboard(&mut self.clipboard, &url) {
+            Ok(()) => self.set_status(StatusKind::Success, "Original URL copied"),
+            Err(error) => self.set_status(StatusKind::Error, format!("Copy failed: {error}")),
+        }
+    }
+
+    fn open_current(&mut self) {
+        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+            self.set_status(StatusKind::Warning, "No post to open");
+            return;
+        };
+        let command = self.config.browser_command();
+        match open_in_browser(&command, &url) {
+            Ok(()) => self.set_status(StatusKind::Success, format!("Opened with {command}")),
+            Err(error) => self.set_status(StatusKind::Error, format!("Open failed: {error}")),
+        }
+    }
+
+    pub fn scroll_by(&mut self, delta: isize) {
+        let max = self.max_scroll() as isize;
+        self.scroll = (self.scroll as isize + delta).clamp(0, max) as usize;
+    }
+
+    pub fn scroll_page(&mut self, direction: i32) {
+        let step = self.article_height.saturating_sub(2).max(1) as isize;
+        self.scroll_by(step * direction as isize);
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.scroll = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll = self.max_scroll();
+    }
+
+    pub fn max_scroll(&self) -> usize {
+        self.article_lines
+            .len()
+            .saturating_sub(self.article_height.max(1))
+    }
+
+    pub fn set_status(&mut self, kind: StatusKind, message: impl Into<String>) {
+        self.status = Some(Status {
+            message: message.into(),
+            kind,
+            at: Instant::now(),
+        });
+    }
+
+    pub fn filter_label(&self) -> String {
+        if self.selected_topics.is_empty() {
+            return "all topics".to_string();
+        }
+        self.selected_topics
+            .iter()
+            .map(|slug| self.topic_name(slug))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn topic_name(&self, slug: &str) -> String {
+        self.topics
+            .iter()
+            .find(|topic| topic.slug == slug)
+            .map(|topic| topic.name.clone())
+            .unwrap_or_else(|| slug.to_string())
+    }
+
+    pub fn article_title(&self) -> Option<&str> {
+        match &self.article {
+            ArticleState::Ready(article) => Some(&article.title),
+            _ => self.current.as_ref().map(|post| post.title.as_str()),
+        }
+    }
+
+    pub fn is_liked(&self, url: &str) -> bool {
+        self.liked.contains(url)
+    }
+}
+
+#[derive(Debug)]
+enum Msg {
+    Deck {
+        epoch: u64,
+        topic: Option<String>,
+        result: Result<Vec<Post>, String>,
+    },
+    Article {
+        url: String,
+        result: Result<Article, String>,
+    },
+    Like {
+        url: String,
+        result: Result<LikeOutcome, String>,
+    },
+    Topics(Result<Vec<Topic>, String>),
+}
+
+fn format_error(error: anyhow::Error) -> String {
+    format!("{error:#}")
+}
+
+fn fallback_topics() -> Vec<Topic> {
+    let mut topics: Vec<Topic> = FALLBACK_TOPICS
+        .iter()
+        .map(|(slug, name)| Topic {
+            slug: (*slug).to_string(),
+            name: (*name).to_string(),
+            description: String::new(),
+        })
+        .collect();
+    topics.sort_by_key(|a| a.name.to_lowercase());
+    topics
+}
+
+fn copy_to_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str) -> Result<()> {
+    if try_external_clipboard(text) {
+        return Ok(());
+    }
+
+    if clipboard.is_none() {
+        *clipboard = arboard::Clipboard::new().ok();
+    }
+    if let Some(cb) = clipboard.as_mut() {
+        if cb.set_text(text.to_string()).is_ok() {
+            return Ok(());
+        }
+    }
+    *clipboard = None;
+    bail!("no clipboard backend available (tried wl-copy, xclip, xsel, pbcopy, arboard)")
+}
+
+fn try_external_clipboard(text: &str) -> bool {
+    let mut commands: Vec<(&str, &[&str])> = Vec::new();
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        commands.push(("wl-copy", &[]));
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        commands.push(("xclip", &["-selection", "clipboard"]));
+        commands.push(("xsel", &["--clipboard", "--input"]));
+    }
+    #[cfg(target_os = "macos")]
+    commands.push(("pbcopy", &[]));
+    if commands.is_empty() {
+        commands.extend([
+            ("wl-copy", &[][..]),
+            ("xclip", &["-selection", "clipboard"][..]),
+            ("xsel", &["--clipboard", "--input"][..]),
+            ("pbcopy", &[][..]),
+        ]);
+    }
+
+    for (command, args) in commands {
+        let Ok(mut child) = Command::new(command)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(stdin) = child.stdin.as_mut() {
+            if stdin.write_all(text.as_bytes()).is_err() {
+                let _ = child.wait();
+                continue;
+            }
+        }
+        if child.wait().is_ok_and(|status| status.success()) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+fn open_in_browser(command: &str, url: &str) -> Result<()> {
+    let quoted = shell_quote(url);
+    let script = if command.contains("{}") {
+        command.replace("{}", &quoted)
+    } else if command.contains("%s") {
+        command.replace("%s", &quoted)
+    } else {
+        format!("{command} {quoted}")
+    };
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("spawning browser command '{command}'"))?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_in_browser(command: &str, url: &str) -> Result<()> {
+    let mut child = Command::new("cmd")
+        .args(["/C", &format!("{command} \"{url}\"")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("spawning browser command '{command}'"))?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quotes_single_quotes() {
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn fallback_topics_are_unique_and_sorted() {
+        let topics = fallback_topics();
+        let mut slugs: Vec<_> = topics.iter().map(|topic| topic.slug.as_str()).collect();
+        let unique = slugs.len();
+        slugs.sort();
+        slugs.dedup();
+        assert_eq!(slugs.len(), unique);
+        assert!(
+            topics
+                .windows(2)
+                .all(|pair| { pair[0].name.to_lowercase() <= pair[1].name.to_lowercase() })
+        );
+    }
+}
