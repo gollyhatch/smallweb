@@ -41,7 +41,7 @@ cargo install --path .
 | `N` | Previous article search match (while searching) |
 | `b`, `←` | Go back to the previous post |
 | `l` | Toggle like on the current post (sent to Kagi) |
-| `F` | Flag the current post as inappropriate (sent to Kagi) |
+| `F` | Flag the current post as inappropriate (confirmation required, sent to Kagi) |
 | `y` | Copy the original URL |
 | `Y` | Copy the Small Web URL for the post |
 | `o`, `Enter` | Open the original post in the configured browser |

@@ -91,6 +91,7 @@ pub struct App {
     pub article_height: usize,
     pub liked: HashSet<String>,
     pub liking: HashSet<String>,
+    pub flag_confirmation: Option<FlagConfirmation>,
     flagged: HashSet<String>,
     flagging: HashSet<String>,
     history: Vec<Post>,
@@ -174,6 +175,7 @@ impl App {
             article_height: 10,
             liked: HashSet::new(),
             liking: HashSet::new(),
+            flag_confirmation: None,
             flagged: HashSet::new(),
             flagging: HashSet::new(),
             history: back,
@@ -434,6 +436,11 @@ impl App {
 
         if self.search_input.is_some() {
             self.handle_search_input(key);
+            return;
+        }
+
+        if self.flag_confirmation.is_some() {
+            self.handle_flag_confirmation_key(key);
             return;
         }
 
@@ -854,6 +861,7 @@ impl App {
             let overflow = self.seen_posts.len() - SEEN_LIMIT;
             self.seen_posts.drain(..overflow);
         }
+        self.flag_confirmation = None;
         self.current = Some(post);
         self.pending_next = false;
         self.status = None;
@@ -886,6 +894,7 @@ impl App {
     fn reload(&mut self) {
         self.article_search = None;
         self.search_input = None;
+        self.flag_confirmation = None;
         if let Some(post) = self.current.clone() {
             self.article = ArticleState::Loading;
             self.reset_article_view();
@@ -905,6 +914,7 @@ impl App {
         self.article = ArticleState::Empty;
         self.article_search = None;
         self.search_input = None;
+        self.flag_confirmation = None;
         self.topic_rotation = 0;
         self.reset_article_view();
         self.ensure_queue();
@@ -1031,10 +1041,45 @@ impl App {
     }
 
     fn flag_current(&mut self) {
-        let Some(url) = self.current.as_ref().map(|post| post.url.clone()) else {
+        let Some(post) = self.current.as_ref() else {
             self.set_status(StatusKind::Warning, "No post to flag");
             return;
         };
+        if self.flagged.contains(&post.url) {
+            self.set_status(StatusKind::Info, "You already flagged this post");
+            return;
+        }
+        if self.flagging.contains(&post.url) {
+            self.set_status(StatusKind::Info, "Flag already in flight");
+            return;
+        }
+        self.flag_confirmation = Some(FlagConfirmation {
+            title: post.title.clone(),
+            domain: post.domain.clone(),
+            url: post.url.clone(),
+        });
+    }
+
+    fn handle_flag_confirmation_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                if let Some(confirmation) = self.flag_confirmation.take() {
+                    self.send_flag(confirmation.url);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.flag_confirmation = None;
+                self.set_status(StatusKind::Info, "Flag canceled");
+            }
+            _ => {}
+        }
+    }
+
+    fn send_flag(&mut self, url: String) {
+        if self.current.as_ref().is_none_or(|post| post.url != url) {
+            self.set_status(StatusKind::Warning, "Post changed; flag canceled");
+            return;
+        }
         if self.flagged.contains(&url) {
             self.set_status(StatusKind::Info, "You already flagged this post");
             return;
@@ -1265,6 +1310,12 @@ impl App {
     pub fn is_flagged(&self, url: &str) -> bool {
         self.flagged.contains(url)
     }
+}
+
+pub struct FlagConfirmation {
+    pub title: String,
+    pub domain: String,
+    pub url: String,
 }
 
 pub struct ArticleImageLayout {

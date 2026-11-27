@@ -55,6 +55,10 @@ pub fn render(app: &mut App, frame: &mut Frame<'_>) {
     if app.history_search.is_some() {
         render_history(app, frame, &theme);
     }
+
+    if app.flag_confirmation.is_some() {
+        render_flag_confirmation(app, frame, &theme);
+    }
 }
 
 fn render_header(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
@@ -381,6 +385,48 @@ fn render_footer(app: &App, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+fn render_flag_confirmation(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
+    let Some(confirmation) = &app.flag_confirmation else {
+        return;
+    };
+    let area = frame.area();
+    let popup = centered(area, area.width.min(76), area.height.min(11));
+    frame.render_widget(Clear, popup);
+    let warning = Style::default().fg(color(theme, "warning"));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(" Flag post ")
+        .border_style(warning)
+        .style(Style::default().bg(color(theme, "bg.panel")));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.height == 0 {
+        return;
+    }
+
+    let primary = Style::default().fg(color(theme, "text.primary"));
+    let muted = muted_style(theme);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Flag this post as inappropriate?",
+            warning.add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(one_line(&confirmation.title), primary)),
+        Line::from(Span::styled(one_line(&confirmation.domain), muted)),
+        Line::from(""),
+        Line::from(Span::styled("This sends a report to Kagi.", muted)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("y / enter", key_style(theme)),
+            Span::styled(" confirm   ", muted),
+            Span::styled("n / esc", key_style(theme)),
+            Span::styled(" cancel", muted),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
 fn render_history(app: &mut App, frame: &mut Frame<'_>, theme: &Theme) {
     let area = frame.area();
     let popup = centered(area, area.width.min(100), area.height.min(30));
@@ -612,7 +658,7 @@ fn render_help(app: &App, frame: &mut Frame<'_>, theme: &Theme) {
         ("/", "search the article text"),
         ("n / N", "next / previous search match (while searching)"),
         ("l", "toggle like on the post (sent to Kagi)"),
-        ("F", "flag the post as inappropriate (sent to Kagi)"),
+        ("F", "flag the post (asks for confirmation; sent to Kagi)"),
         ("y", "copy the original URL"),
         ("Y", "copy the Small Web URL for the post"),
         ("o / enter", "open the original post in your browser"),
